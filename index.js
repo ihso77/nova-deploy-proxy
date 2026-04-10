@@ -44,8 +44,8 @@ app.post('/deploy', async (req, res) => {
     const name = `bot-${botName.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 30)}`;
     console.log(`Deploy: ${name} (${language})`);
 
-    // Replace YOUR_TOKEN with real token in code
-    const finalCode = code.replace(/['"]YOUR_TOKEN['"]|YOUR_TOKEN/g, botToken);
+    // Replace YOUR_TOKEN with real token in code, preserving surrounding quotes
+    const finalCode = code.replace(/(['"])YOUR_TOKEN\1/g, `$1${botToken}$1`);
     const codeB64 = Buffer.from(finalCode).toString('base64');
 
     // Use the pre-built runner repo (has discord.js installed in Dockerfile)
