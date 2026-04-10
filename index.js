@@ -167,18 +167,55 @@ app.get('/status', async (req, res) => {
 app.post('/payment', async (req, res) => {
   // Accept both new format (returnUrl/orderId) and old format (success_url/cancel_url)
   const body = req.body;
-  const amount = body.amount;
+  const clientAmount = body.amount;
+  const planId = body.planId;  // plan UUID for server-side price verification
   const currency = body.currency || 'USD';
   const description = body.description;
   const returnUrl = body.returnUrl || body.success_url;
   const orderId = body.orderId || body.metadata?.orderId || `nova_${Date.now()}`;
 
-  if (!amount || !returnUrl) return res.status(400).json({ error: 'Missing required fields: amount, returnUrl' });
+  if (!clientAmount || !returnUrl) return res.status(400).json({ error: 'Missing required fields' });
+
+  // SECURITY: Clamp amount to prevent absurd values
+  const parsedAmount = parseFloat(clientAmount);
+  if (isNaN(parsedAmount) || parsedAmount < 0.01 || parsedAmount > 9999) {
+    return res.status(400).json({ error: 'Invalid amount' });
+  }
 
   const PAYMENTO_API_KEY = process.env.PAYMENTO_API_KEY || 'MzFCRUEzMTk0MzVCQzRDMDg2N0ZCREFCMzQ5OTc4QzI=';
+  const SUPABASE_URL = process.env.SUPABASE_URL || 'https://mmvdflwchecvzxzsumlm.supabase.co';
+  const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
 
   try {
-    console.log('Payment request:', { amount, currency, orderId, returnUrl });
+    // SECURITY: Verify price from server if planId provided
+    let verifiedAmount = parsedAmount;
+
+    if (planId && SUPABASE_ANON_KEY) {
+      try {
+        const planRes = await fetch(`${SUPABASE_URL}/rest/v1/plans?id=eq.${planId}&select=price,name`, {
+          headers: {
+            'apikey': SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          },
+        });
+        if (planRes.ok) {
+          const planData = await planRes.json();
+          if (planData && planData.length > 0) {
+            const serverPrice = parseFloat(planData[0].price);
+            if (Math.abs(serverPrice - parsedAmount) > 0.01) {
+              // Client sent wrong price — use server price
+              console.warn('Price mismatch: client sent', parsedAmount, 'server has', serverPrice);
+              verifiedAmount = serverPrice;
+            }
+          }
+        }
+      } catch (e) {
+        // If plan lookup fails, continue with client amount
+        console.warn('Plan price lookup failed, using client amount:', e.message);
+      }
+    }
+
+    console.log('Payment request:', { verifiedAmount, currency, orderId, returnUrl });
 
     // Paymento API: POST /v1/payment/request with Api-Key header
     const paymentRes = await fetch('https://api.paymento.io/v1/payment/request', {
@@ -189,11 +226,11 @@ app.post('/payment', async (req, res) => {
         'Api-Key': PAYMENTO_API_KEY,
       },
       body: JSON.stringify({
-        fiatAmount: String(amount),       // Paymento expects string
+        fiatAmount: String(verifiedAmount),
         fiatCurrency: currency || 'USD',
         returnUrl: returnUrl,
         orderId: orderId,
-        riskSpeed: 1,                      // 1 = accept after blockchain confirmations (safer)
+        riskSpeed: 1,
         additionalData: description ? [{ key: 'description', value: description }] : [],
       }),
     });
