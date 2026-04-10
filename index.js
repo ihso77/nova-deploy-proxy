@@ -107,13 +107,16 @@ app.post('/deploy', async (req, res) => {
 
     // Update service instance with start command
     await graphql(`
-      mutation($serviceId: String!, $startCommand: String!) {
-        serviceInstanceUpdate(input: {
-          id: $serviceId,
-          startCommand: $startCommand
-        })
+      mutation($serviceId: String!, $environmentId: String!, $startCommand: String!) {
+        serviceInstanceUpdate(
+          serviceId: $serviceId,
+          environmentId: $environmentId,
+          input: {
+            startCommand: $startCommand
+          }
+        )
       }
-    `, { serviceId, startCommand });
+    `, { serviceId, environmentId: NOVA_ENV_ID, startCommand });
 
     console.log(`Bot deployed: ${serviceName}`);
     res.json({
