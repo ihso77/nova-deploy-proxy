@@ -165,8 +165,15 @@ app.get('/status', async (req, res) => {
 // Paymento proxy - correct API format per docs.paymento.io
 // POST /payment — create payment request → returns token + gateway URL
 app.post('/payment', async (req, res) => {
-  const { amount, currency, returnUrl, orderId, description } = req.body;
-  if (!amount || !returnUrl || !orderId) return res.status(400).json({ error: 'Missing required fields' });
+  // Accept both new format (returnUrl/orderId) and old format (success_url/cancel_url)
+  const body = req.body;
+  const amount = body.amount;
+  const currency = body.currency || 'USD';
+  const description = body.description;
+  const returnUrl = body.returnUrl || body.success_url;
+  const orderId = body.orderId || body.metadata?.orderId || `nova_${Date.now()}`;
+
+  if (!amount || !returnUrl) return res.status(400).json({ error: 'Missing required fields: amount, returnUrl' });
 
   const PAYMENTO_API_KEY = process.env.PAYMENTO_API_KEY || 'MzFCRUEzMTk0MzVCQzRDMDg2N0ZCREFCMzQ5OTc4QzI=';
 
