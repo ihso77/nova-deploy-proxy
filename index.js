@@ -1,11 +1,10 @@
 const express = require('express');
 const fetch = require('node-fetch');
-const path = require('path');
 
 const app = express();
 app.use(express.json({ limit: '5mb' }));
 
-const RAILWAY_API = 'https://graphql.railway.app/v2/graphql';
+const RAILWAY_API = 'https://backboard.railway.app/graphql/v2';
 const RAILWAY_TOKEN = process.env.RAILWAY_API_TOKEN || '';
 
 const HEADERS = {
@@ -13,8 +12,8 @@ const HEADERS = {
   'Authorization': `Bearer ${RAILWAY_TOKEN}`,
 };
 
-// Cache for project IDs
-const projectCache = {};
+const NOVA_PROJECT_ID = process.env.NOVA_PROJECT_ID || '7b4710b9-bda7-4eb5-9f46-97e70e7dcda9';
+const NOVA_ENV_ID = process.env.NOVA_ENV_ID || '92d7d13d-1173-4cd0-b6e9-92fdbc1d47ae';
 
 async function graphql(query, variables = {}) {
   const res = await fetch(RAILWAY_API, {
@@ -22,89 +21,48 @@ async function graphql(query, variables = {}) {
     headers: HEADERS,
     body: JSON.stringify({ query, variables }),
   });
-  const json = await res.json();
+  const text = await res.text();
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    console.error('Invalid JSON response:', text.substring(0, 200));
+    throw new Error('Invalid response from Railway API');
+  }
   if (json.errors) {
-    console.error('GraphQL Error:', JSON.stringify(json.errors));
-    throw new Error(json.errors[0]?.message || 'GraphQL error');
+    const errMsg = json.errors.map(e => e.message).join(', ');
+    console.error('GraphQL Error:', errMsg);
+    throw new Error(errMsg);
   }
   return json.data;
 }
 
-// Get or create a project for a user
-async function ensureProject(userId) {
-  if (projectCache[userId]) return projectCache[userId];
-
-  const projectName = `nova-bot-${userId.slice(0, 8)}`;
-
-  try {
-    const data = await graphql(`
-      mutation($name: String!) {
-        projectCreate(input: { name: $name }) {
-          id
-          name
-        }
-      }
-    `, { name: projectName });
-
-    const project = data.projectCreate;
-    if (project?.id) {
-      projectCache[userId] = project.id;
-      return project.id;
-    }
-  } catch (err) {
-    console.log('Project might already exist, listing...');
-  }
-
-  // Try to find existing project
-  const data = await graphql(`
-    query {
-      me {
-        projects {
-          edges {
-            node {
-              id
-              name
-            }
-          }
-        }
-      }
-    }
-  `);
-
-  const projects = data.me?.projects?.edges?.map(e => e.node) || [];
-  const existing = projects.find(p => p.name.includes('nova-bot'));
-
-  if (existing) {
-    projectCache[userId] = existing.id;
-    return existing.id;
-  }
-
-  throw new Error('Failed to create or find project');
-}
-
 // Deploy endpoint
 app.post('/deploy', async (req, res) => {
-  const { botName, botToken, language, code, userId } = req.body;
+  const { botName, botToken, language, code } = req.body;
 
   if (!botToken || !code || !language) {
     return res.status(400).json({ error: 'Missing required fields: botToken, code, language' });
   }
 
   try {
-    const uid = userId || 'default';
-    const projectId = await ensureProject(uid);
+    // Create service with image source
+    const serviceName = `bot-${botName.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 30)}`;
+    console.log(`Creating service: ${serviceName}`);
 
-    // Create service
-    console.log(`Creating service: ${botName} in project: ${projectId}`);
+    const imageName = language === 'python' ? 'python:3.11-slim' : 'node:20-alpine';
 
-    const serviceName = botName.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 40);
     const createData = await graphql(`
-      mutation($projectId: ID!, $name: String!) {
-        serviceCreate(input: { projectId: $projectId, name: $name }) {
+      mutation($projectId: String!, $name: String!, $image: String!) {
+        serviceCreate(input: {
+          projectId: $projectId,
+          name: $name,
+          source: { image: $image }
+        }) {
           id
         }
       }
-    `, { projectId, name: serviceName });
+    `, { projectId: NOVA_PROJECT_ID, name: serviceName, image: imageName });
 
     const serviceId = createData.serviceCreate?.id;
     if (!serviceId) {
@@ -112,70 +70,61 @@ app.post('/deploy', async (req, res) => {
     }
     console.log(`Service created: ${serviceId}`);
 
+    // Encode bot code as base64
+    const codeB64 = Buffer.from(code).toString('base64');
+
     // Set environment variables
     await graphql(`
-      mutation($serviceId: ID!, $name: String!, $value: String!) {
-        serviceVariableCreate(input: { serviceId: $serviceId, name: $name, value: $value }) {
-          id
-        }
-      }
-    `, { serviceId, name: 'DISCORD_TOKEN', value: botToken });
-
-    // Set the bot code as env var
-    await graphql(`
-      mutation($serviceId: ID!, $name: String!, $value: String!) {
-        serviceVariableCreate(input: { serviceId: $serviceId, name: $name, value: $value }) {
-          id
-        }
-      }
-    `, { serviceId, name: 'BOT_CODE', value: code });
-
-    // Set language
-    await graphql(`
-      mutation($serviceId: ID!, $name: String!, $value: String!) {
-        serviceVariableCreate(input: { serviceId: $serviceId, name: $name, value: $value }) {
-          id
-        }
-      }
-    `, { serviceId, name: 'BOT_LANGUAGE', value: language });
-
-    // Create deployment with Dockerfile that runs the bot
-    const dockerfile = language === 'python'
-      ? `FROM python:3.11-slim
-WORKDIR /app
-RUN pip install discord.py
-RUN echo "$BOT_CODE" > bot.py
-CMD ["python", "bot.py"]`
-      : `FROM node:20-alpine
-WORKDIR /app
-RUN npm init -y && npm install discord.js
-RUN echo "$BOT_CODE" > bot.js
-CMD ["node", "bot.js"]`;
-
-    console.log('Creating deployment...');
-
-    const deployData = await graphql(`
-      mutation($serviceId: ID!, $dockerfile: String!) {
-        deploymentCreate(input: {
+      mutation($projectId: String!, $environmentId: String!, $serviceId: String!, $name: String!, $value: String!) {
+        variableUpsert(input: {
+          projectId: $projectId,
+          environmentId: $environmentId,
           serviceId: $serviceId,
-          dockerfile: $dockerfile
-        }) {
-          id
-        }
+          name: $name,
+          value: $value,
+          skipDeploys: true
+        })
       }
-    `, { serviceId, dockerfile });
+    `, { projectId: NOVA_PROJECT_ID, environmentId: NOVA_ENV_ID, serviceId, name: 'DISCORD_TOKEN', value: botToken });
 
-    console.log(`Deployment created: ${deployData.deploymentCreate?.id}`);
+    await graphql(`
+      mutation($projectId: String!, $environmentId: String!, $serviceId: String!, $name: String!, $value: String!) {
+        variableUpsert(input: {
+          projectId: $projectId,
+          environmentId: $environmentId,
+          serviceId: $serviceId,
+          name: $name,
+          value: $value,
+          skipDeploys: true
+        })
+      }
+    `, { projectId: NOVA_PROJECT_ID, environmentId: NOVA_ENV_ID, serviceId, name: 'BOT_CODE_B64', value: codeB64 });
 
+    // Set start command based on language
+    const startCmd = language === 'python'
+      ? 'sh -c \'echo "$BOT_CODE_B64" | base64 -d > bot.py && pip install discord.py -q && python bot.py\''
+      : 'sh -c \'echo "$BOT_CODE_B64" | base64 -d > bot.js && npm init -y -q 2>/dev/null && npm install discord.js -q 2>/dev/null && node bot.js\'';
+
+    // Update service instance with start command
+    await graphql(`
+      mutation($serviceId: String!, $startCommand: String!) {
+        serviceInstanceUpdate(input: {
+          id: $serviceId,
+          startCommand: $startCommand
+        })
+      }
+    `, { serviceId, startCommand });
+
+    console.log(`Bot deployed: ${serviceName}`);
     res.json({
       success: true,
       serviceId,
-      deploymentId: deployData.deploymentCreate?.id,
-      message: 'Bot deployed successfully',
+      message: 'Bot deployed to Railway',
+      serviceName,
     });
 
   } catch (err) {
-    console.error('Deploy error:', err);
+    console.error('Deploy error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -190,16 +139,14 @@ app.post('/stop', async (req, res) => {
 
   try {
     await graphql(`
-      mutation($id: ID!) {
-        serviceDelete(input: { id: $id }) {
-          id
-        }
+      mutation($id: String!) {
+        serviceDelete(id: $id)
       }
     `, { id: serviceId });
 
-    res.json({ success: true, message: 'Service deleted' });
+    res.json({ success: true, message: 'Bot service deleted' });
   } catch (err) {
-    console.error('Stop error:', err);
+    console.error('Stop error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
