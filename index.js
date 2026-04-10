@@ -48,49 +48,52 @@ app.post('/deploy', async (req, res) => {
     const finalCode = code.replace(/['"]YOUR_TOKEN['"]|YOUR_TOKEN/g, botToken);
     const codeB64 = Buffer.from(finalCode).toString('base64');
 
-    // Build start command - use full node:20 image (not alpine) to avoid build tool issues
-    // Also remove 2>/dev/null so errors are visible in logs
-    let startCmd;
-    if (language === 'python') {
-      startCmd = [
-        'sh -c',
-        '"pip install discord.py &&',
-        `echo ${codeB64} | base64 -d > bot.py &&`,
-        'python bot.py"'
-      ].join(' ');
-    } else {
-      startCmd = [
-        'sh -c',
-        '"npm init -y &&',
-        'npm install discord.js &&',
-        `echo ${codeB64} | base64 -d > bot.js &&`,
-        'node bot.js"'
-      ].join(' ');
-    }
+    // Use the pre-built runner repo (has discord.js installed in Dockerfile)
+    const repo = language === 'python' ? 'ihso77/nova-bot-runner-py' : 'ihso77/nova-bot-runner';
 
-    // Use full node image (not alpine) - has build tools for discord.js native deps
-    const image = language === 'python' ? 'python:3.11-slim' : 'node:20';
-
-    // 1. Create service
+    // 1. Create service from repo (Dockerfile has discord.js pre-installed)
     const d = await gql(`
-      mutation($p: String!, $n: String!, $i: String!) {
-        s: serviceCreate(input: { projectId: $p, name: $n, source: { image: $i } }) { id }
+      mutation($p: String!, $n: String!, $r: String!) {
+        s: serviceCreate(input: { projectId: $p, name: $n, source: { repo: $r } }) { id }
       }
-    `, { p: PROJECT_ID, n: name, i: image });
+    `, { p: PROJECT_ID, n: name, r: repo });
     const serviceId = d.s?.id;
     if (!serviceId) throw new Error('Failed to create service');
     console.log(`Service: ${serviceId}`);
 
-    // 2. Set startCommand
+    // 2. Set BOT_CODE_B64 env var (skip auto-deploy)
+    await gql(`
+      mutation($input: VariableUpsertInput!) {
+        v: variableUpsert(input: $input)
+      }
+    `, {
+      input: {
+        projectId: PROJECT_ID,
+        environmentId: ENV_ID,
+        serviceId: serviceId,
+        name: 'BOT_CODE_B64',
+        value: codeB64,
+        skipDeploys: true
+      }
+    });
+    console.log(`Env var set`);
+
+    // 3. Set startCommand to read env var, decode, and run bot
+    let startCmd;
+    if (language === 'python') {
+      startCmd = 'sh -c "echo $BOT_CODE_B64 | base64 -d > /app/bot.py && python /app/bot.py"';
+    } else {
+      startCmd = 'sh -c "echo $BOT_CODE_B64 | base64 -d > /app/bot.js && node /app/bot.js"';
+    }
+
     await gql(`
       mutation($s: String!, $e: String!, $c: String!) {
         u: serviceInstanceUpdate(serviceId: $s, environmentId: $e, input: { startCommand: $c })
       }
     `, { s: serviceId, e: ENV_ID, c: startCmd });
+    console.log(`Start command set`);
 
-    console.log(`Start command set for ${serviceId}`);
-
-    // 3. Trigger actual deploy
+    // 4. Trigger deploy
     await gql(`
       mutation($s: String!, $e: String!) {
         d: serviceInstanceDeploy(serviceId: $s, environmentId: $e)
@@ -116,7 +119,6 @@ app.post('/stop', async (req, res) => {
   }
 });
 
-// Health check
 app.get('/', (req, res) => res.json({ status: 'ok' }));
 
 app.listen(process.env.PORT || 3000, '0.0.0.0', () => console.log('Proxy OK'));
