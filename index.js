@@ -42,20 +42,34 @@ app.post('/deploy', async (req, res) => {
 
   try {
     const name = `bot-${botName.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 30)}`;
-    const image = language === 'python' ? 'python:3.11-slim' : 'node:20-alpine';
     console.log(`Deploy: ${name} (${language})`);
 
     // Replace YOUR_TOKEN with real token in code
     const finalCode = code.replace(/['"]YOUR_TOKEN['"]|YOUR_TOKEN/g, botToken);
     const codeB64 = Buffer.from(finalCode).toString('base64');
 
-    // Build start command
+    // Build start command - use full node:20 image (not alpine) to avoid build tool issues
+    // Also remove 2>/dev/null so errors are visible in logs
     let startCmd;
     if (language === 'python') {
-      startCmd = `sh -c 'pip install discord.py 2>/dev/null && echo "${codeB64}" | base64 -d > bot.py && python bot.py'`;
+      startCmd = [
+        'sh -c',
+        '"pip install discord.py &&',
+        `echo ${codeB64} | base64 -d > bot.py &&`,
+        'python bot.py"'
+      ].join(' ');
     } else {
-      startCmd = `sh -c 'npm init -y 2>/dev/null && npm install discord.js 2>/dev/null && echo "${codeB64}" | base64 -d > bot.js && node bot.js'`;
+      startCmd = [
+        'sh -c',
+        '"npm init -y &&',
+        'npm install discord.js &&',
+        `echo ${codeB64} | base64 -d > bot.js &&`,
+        'node bot.js"'
+      ].join(' ');
     }
+
+    // Use full node image (not alpine) - has build tools for discord.js native deps
+    const image = language === 'python' ? 'python:3.11-slim' : 'node:20';
 
     // 1. Create service
     const d = await gql(`
@@ -74,14 +88,16 @@ app.post('/deploy', async (req, res) => {
       }
     `, { s: serviceId, e: ENV_ID, c: startCmd });
 
-    // 3. Trigger actual deploy (not environmentTriggersDeploy - that only works with GitHub repos)
+    console.log(`Start command set for ${serviceId}`);
+
+    // 3. Trigger actual deploy
     await gql(`
       mutation($s: String!, $e: String!) {
         d: serviceInstanceDeploy(serviceId: $s, environmentId: $e)
       }
     `, { s: serviceId, e: ENV_ID });
 
-    console.log(`Done: ${name}`);
+    console.log(`Deploy triggered for ${name}`);
     res.json({ success: true, serviceId, serviceName: name });
   } catch (err) {
     console.error('FAIL:', err.message);
@@ -100,6 +116,7 @@ app.post('/stop', async (req, res) => {
   }
 });
 
+// Health check
 app.get('/', (req, res) => res.json({ status: 'ok' }));
 
-app.listen(process.env.PORT || 3000, '0.0.0.0', () => console.log('OK'));
+app.listen(process.env.PORT || 3000, '0.0.0.0', () => console.log('Proxy OK'));
