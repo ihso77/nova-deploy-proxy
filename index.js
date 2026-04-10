@@ -119,6 +119,49 @@ app.post('/stop', async (req, res) => {
   }
 });
 
+// Get deployment status and logs for a service
+app.get('/status', async (req, res) => {
+  const { serviceId } = req.query;
+  if (!serviceId) return res.status(400).json({ error: 'Missing serviceId' });
+
+  try {
+    const data = await gql(`
+      query($sid: String!) {
+        service(id: $sid) {
+          deployments(limit: 1) {
+            edges { node { id status } }
+          }
+        }
+      }
+    `, { sid: serviceId });
+
+    const deployment = data.service?.deployments?.edges?.[0]?.node;
+    if (!deployment) return res.json({ status: 'unknown' });
+
+    // If deployment is done, fetch logs
+    let logs = [];
+    if (deployment.status === 'CRASHED' || deployment.status === 'SUCCESS') {
+      try {
+        const logsData = await gql(`
+          query($did: String!) { deploymentLogs(deploymentId: $did) { message severity } }
+        `, { did: deployment.id });
+        if (logsData.deploymentLogs) {
+          logs = logsData.deploymentLogs
+            .filter(l => l.severity === 'error' || l.severity === 'fatal' ||
+              (l.message && (l.message.includes('Logged in') || l.message.includes('Ready') ||
+                l.message.includes('ready') || l.message.includes('✅') || l.message.includes('Error') ||
+                l.message.includes('error') || l.message.includes('bot.js') || l.message.includes('bot.py'))))
+            .map(l => ({ message: l.message, severity: l.severity }));
+        }
+      } catch {}
+    }
+
+    res.json({ status: deployment.status, logs, deploymentId: deployment.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/', (req, res) => res.json({ status: 'ok' }));
 
 app.listen(process.env.PORT || 3000, '0.0.0.0', () => console.log('Proxy OK'));
