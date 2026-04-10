@@ -162,6 +162,39 @@ app.get('/status', async (req, res) => {
   }
 });
 
+// Paymento proxy - bypasses CORS, keeps API keys server-side
+app.post('/payment', async (req, res) => {
+  const { amount, currency, description, success_url, cancel_url, metadata } = req.body;
+  if (!amount || !success_url) return res.status(400).json({ error: 'Missing fields' });
+
+  const PAYMENTO_API_KEY = process.env.PAYMENTO_API_KEY || 'MzFCRUEzMTk0MzVCQzRDMDg2N0ZCREFCMzQ5OTc4QzI=';
+  const PAYMENTO_SECRET_KEY = process.env.PAYMENTO_SECRET_KEY || 'MzE1NERFQjM3MzcyQUREMkEwOEI2ODJGODc4RjFFQzY=';
+
+  try {
+    const paymentRes = await fetch('https://api.paymento.io/v1/payments', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${PAYMENTO_API_KEY}`,
+        'X-Secret-Key': PAYMENTO_SECRET_KEY,
+      },
+      body: JSON.stringify({
+        amount,
+        currency: currency || 'USD',
+        description: description || 'Nova VPS subscription',
+        success_url,
+        cancel_url,
+        metadata,
+      }),
+    });
+
+    const data = await paymentRes.json();
+    res.status(paymentRes.status).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/', (req, res) => res.json({ status: 'ok' }));
 
 app.listen(process.env.PORT || 3000, '0.0.0.0', () => console.log('Proxy OK'));
