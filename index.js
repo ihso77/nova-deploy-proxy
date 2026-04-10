@@ -131,7 +131,20 @@ app.post('/deploy', async (req, res) => {
         )
       }
     `, { serviceId, environmentId: NOVA_ENV_ID, startCommand: startCmd });
-    console.log(`[v3] Service instance update result:`, updateResult);
+    console.log(`[v3] Instance updated. Triggering deploy...`);
+
+    // Trigger actual deployment
+    await graphql(`
+      mutation($projectId: String!, $environmentId: String!, $serviceId: String!) {
+        environmentTriggersDeploy(input: {
+          projectId: $projectId,
+          environmentId: $environmentId,
+          serviceId: $serviceId
+        })
+      }
+    `, { projectId: NOVA_PROJECT_ID, environmentId: NOVA_ENV_ID, serviceId });
+    console.log(`[v3] Deploy triggered for: ${serviceName}`);
+
     res.json({
       success: true,
       serviceId,
