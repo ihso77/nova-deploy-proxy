@@ -74,12 +74,12 @@ app.post('/deploy', async (req, res) => {
       }
     `, { s: serviceId, e: ENV_ID, c: startCmd });
 
-    // 3. Trigger deploy
+    // 3. Trigger actual deploy (not environmentTriggersDeploy - that only works with GitHub repos)
     await gql(`
-      mutation($p: String!, $e: String!, $s: String!) {
-        d: environmentTriggersDeploy(input: { projectId: $p, environmentId: $e, serviceId: $s })
+      mutation($s: String!, $e: String!) {
+        d: serviceInstanceDeploy(serviceId: $s, environmentId: $e)
       }
-    `, { p: PROJECT_ID, e: ENV_ID, s: serviceId });
+    `, { s: serviceId, e: ENV_ID });
 
     console.log(`Done: ${name}`);
     res.json({ success: true, serviceId, serviceName: name });
