@@ -346,45 +346,63 @@ app.post('/verify', async (req, res) => {
 });
 
 // Discord username availability checker proxy
-// Bypasses CORS — Discord API blocks direct browser requests
-// Rate limit: ~5 req/s per IP (shared across all users)
+// Uses Discord's registration endpoint to check usernames without auth
+// Logic: if register returns USERNAME_ALREADY_TAKEN → unavailable, otherwise → available
 app.get('/discord-check', async (req, res) => {
   const { username } = req.query;
   if (!username || typeof username !== 'string') {
     return res.status(400).json({ error: 'Missing username parameter' });
   }
-  // Validate username format client-side rules
   if (username.length < 2 || username.length > 32) {
     return res.status(400).json({ error: 'Username must be 2-32 characters' });
   }
-  if (/^[_\.]/.test(username)) {
-    return res.status(400).json({ error: 'Username cannot start with _ or .' });
-  }
-  if (/[_\.]$/.test(username)) {
-    return res.status(400).json({ error: 'Username cannot end with _ or .' });
-  }
-  if (/[__\.\.]{2}|[_\.]{2}/.test(username)) {
-    return res.status(400).json({ error: 'Username cannot have consecutive special chars' });
-  }
 
   try {
-    const discordRes = await fetch(`https://discord.com/api/v9/users/username-available?username=${encodeURIComponent(username)}`, {
+    const superProps = Buffer.from(JSON.stringify({
+      os: 'Windows', browser: 'Chrome', device: '', system_locale: 'en-US',
+      browser_user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      browser_version: '131.0.0.0', os_version: '10', referrer: '', referring_domain: '',
+      referrer_current: '', referring_domain_current: '', release_channel: 'stable',
+      client_build_number: 99999, client_event_source: null
+    })).toString('base64');
+
+    // Send fake registration request — Discord only cares about username field
+    const discordRes = await fetch('https://discord.com/api/v9/auth/register', {
+      method: 'POST',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
         'Accept': '*/*',
-        'Accept-Language': 'en-US,en;q=0.9',
+        'Origin': 'https://discord.com',
+        'Referer': 'https://discord.com/register',
+        'x-super-properties': superProps,
       },
+      body: JSON.stringify({
+        username: username,
+        password: 'Xk9#mP2vLq8nR4wY',
+        email: `${Date.now()}_${Math.random().toString(36).slice(2)}@neverused.invalid`,
+        date_of_birth: '2000-01-01',
+        consent: true,
+      }),
     });
-    const text = await discordRes.text();
-    // Discord returns "true" or "false" as plain text
-    if (text === 'true') {
-      res.json({ available: true, username });
-    } else if (text === 'false') {
+
+    const data = await discordRes.json();
+
+    if (discordRes.status === 429) {
+      // Rate limited
+      console.warn('Discord rate limited');
+      return res.json({ available: false, username, retry: true });
+    }
+
+    // Check if the error is specifically USERNAME_ALREADY_TAKEN
+    const usernameErrors = data.errors?.username?._errors || [];
+    const isTaken = usernameErrors.some((e) => e.code === 'USERNAME_ALREADY_TAKEN');
+
+    if (isTaken) {
       res.json({ available: false, username });
     } else {
-      // Rate limited or error — return as unavailable to avoid false positives
-      console.warn('Discord API unexpected response for', username, ':', text.substring(0, 200));
-      res.json({ available: false, username, retry: true });
+      // Any other error (password, email, etc.) means username is available
+      res.json({ available: true, username });
     }
   } catch (err) {
     console.error('Discord check error:', err.message);
