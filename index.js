@@ -3,7 +3,7 @@ const fetch = require('node-fetch');
 
 const app = express();
 
-// CORS - allow all origins
+// CORS
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -36,7 +36,7 @@ async function graphql(query, variables = {}) {
   try {
     json = JSON.parse(text);
   } catch (e) {
-    console.error('Invalid JSON response:', text.substring(0, 200));
+    console.error('Invalid JSON:', text.substring(0, 200));
     throw new Error('Invalid response from Railway API');
   }
   if (json.errors) {
@@ -47,113 +47,83 @@ async function graphql(query, variables = {}) {
   return json.data;
 }
 
+// Build Dockerfile with bot code embedded
+function buildDockerfile(code, language, botToken) {
+  // Replace YOUR_TOKEN placeholder in the code
+  const finalCode = code.replace(/['"]YOUR_TOKEN['"]|YOUR_TOKEN/g, botToken);
+
+  if (language === 'python') {
+    return `FROM python:3.11-slim
+WORKDIR /app
+RUN pip install discord.py
+COPY <<'BOTCODE' bot.py
+${finalCode}
+BOTCODE
+CMD ["python", "bot.py"]`;
+  }
+
+  return `FROM node:20-alpine
+WORKDIR /app
+RUN npm init -y && npm install discord.js
+COPY <<'BOTCODE' bot.js
+${finalCode}
+BOTCODE
+CMD ["node", "bot.js"]`;
+}
+
 // Deploy endpoint
 app.post('/deploy', async (req, res) => {
   const { botName, botToken, language, code } = req.body;
 
   if (!botToken || !code || !language) {
-    return res.status(400).json({ error: 'Missing required fields: botToken, code, language' });
+    return res.status(400).json({ error: 'Missing required fields' });
   }
 
   try {
-    // Create service with image source
     const serviceName = `bot-${botName.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 30)}`;
-    console.log(`[v3] Creating service: ${serviceName}`);
+    console.log(`Creating: ${serviceName}`);
 
     const imageName = language === 'python' ? 'python:3.11-slim' : 'node:20-alpine';
 
+    // 1. Create service with image source
     const createData = await graphql(`
-      mutation($projectId: String!, $name: String!, $image: String!) {
-        serviceCreate(input: {
-          projectId: $projectId,
-          name: $name,
-          source: { image: $image }
-        }) {
-          id
-        }
+      mutation($p: String!, $n: String!, $img: String!) {
+        serviceCreate(input: { projectId: $p, name: $n, source: { image: $img } }) { id }
       }
-    `, { projectId: NOVA_PROJECT_ID, name: serviceName, image: imageName });
+    `, { p: NOVA_PROJECT_ID, n: serviceName, img: imageName });
 
     const serviceId = createData.serviceCreate?.id;
-    if (!serviceId) {
-      throw new Error('Failed to create service');
-    }
-    console.log(`[v3] Service created: ${serviceId}`);
-    console.log(`[v3] Setting env vars...`);
+    if (!serviceId) throw new Error('Failed to create service');
+    console.log(`Created: ${serviceId}`);
 
-    // Encode bot code as base64
-    const codeB64 = Buffer.from(code).toString('base64');
-
-    // Set environment variables
-    await graphql(`
-      mutation($projectId: String!, $environmentId: String!, $serviceId: String!, $name: String!, $value: String!) {
-        variableUpsert(input: {
-          projectId: $projectId,
-          environmentId: $environmentId,
-          serviceId: $serviceId,
-          name: $name,
-          value: $value,
-          skipDeploys: true
-        })
-      }
-    `, { projectId: NOVA_PROJECT_ID, environmentId: NOVA_ENV_ID, serviceId, name: 'DISCORD_TOKEN', value: botToken });
-
-    await graphql(`
-      mutation($projectId: String!, $environmentId: String!, $serviceId: String!, $name: String!, $value: String!) {
-        variableUpsert(input: {
-          projectId: $projectId,
-          environmentId: $environmentId,
-          serviceId: $serviceId,
-          name: $name,
-          value: $value,
-          skipDeploys: true
-        })
-      }
-    `, { projectId: NOVA_PROJECT_ID, environmentId: NOVA_ENV_ID, serviceId, name: 'BOT_CODE_B64', value: codeB64 });
-
-    // Set start command based on language
+    // 2. Set start command - write code from base64 env var
+    const escapedCode = finalCode.replace(/'/g, "'\\''");
+    
     const startCmd = language === 'python'
-      ? 'sh -c \'echo "$BOT_CODE_B64" | base64 -d > bot.py && pip install discord.py -q && python bot.py\''
-      : 'sh -c \'echo "$BOT_CODE_B64" | base64 -d > bot.js && npm init -y -q 2>/dev/null && npm install discord.js -q 2>/dev/null && node bot.js\'';
+      ? `sh -c 'echo "${Buffer.from(code.replace(/['"]YOUR_TOKEN['"]|YOUR_TOKEN/g, botToken)).toString('base64')}" | base64 -d > /app/bot.py && pip install discord.py > /dev/null 2>&1 && python /app/bot.py'`
+      : `sh -c 'npm init -y > /dev/null 2>&1 && npm install discord.js > /dev/null 2>&1 && echo "${Buffer.from(code.replace(/['"]YOUR_TOKEN['"]|YOUR_TOKEN/g, botToken)).toString('base64')}" | base64 -d > /app/bot.js && node /app/bot.js'`;
 
-    console.log(`[v3] Env vars set. Updating service instance with startCommand...`);
-    console.log(`[v3] startCommand: ${startCmd.substring(0, 60)}...`);
-
-    // Update service instance with start command
-    const updateResult = await graphql(`
-      mutation($serviceId: String!, $environmentId: String!, $startCommand: String!) {
-        serviceInstanceUpdate(
-          serviceId: $serviceId,
-          environmentId: $environmentId,
-          input: {
-            startCommand: $startCommand
-          }
-        )
-      }
-    `, { serviceId, environmentId: NOVA_ENV_ID, startCommand: startCmd });
-    console.log(`[v3] Instance updated. Triggering deploy...`);
-
-    // Trigger actual deployment
+    // 3. Update instance with startCommand
     await graphql(`
-      mutation($projectId: String!, $environmentId: String!, $serviceId: String!) {
-        environmentTriggersDeploy(input: {
-          projectId: $projectId,
-          environmentId: $environmentId,
-          serviceId: $serviceId
-        })
+      mutation($sid: String!, $eid: String!, $sc: String!) {
+        serviceInstanceUpdate(serviceId: $sid, environmentId: $eid, input: { startCommand: $sc })
       }
-    `, { projectId: NOVA_PROJECT_ID, environmentId: NOVA_ENV_ID, serviceId });
-    console.log(`[v3] Deploy triggered for: ${serviceName}`);
+    `, { sid: serviceId, eid: NOVA_ENV_ID, sc: startCmd });
 
-    res.json({
-      success: true,
-      serviceId,
-      message: 'Bot deployed to Railway',
-      serviceName,
-    });
+    console.log(`Instance updated`);
+
+    // 4. Trigger deploy
+    await graphql(`
+      mutation($p: String!, $e: String!, $s: String!) {
+        environmentTriggersDeploy(input: { projectId: $p, environmentId: $e, serviceId: $s })
+      }
+    `, { p: NOVA_PROJECT_ID, e: NOVA_ENV_ID, s: serviceId });
+
+    console.log(`Deployed: ${serviceName}`);
+    res.json({ success: true, serviceId, serviceName });
 
   } catch (err) {
-    console.error('Deploy error:', err.message);
+    console.error('Error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -161,31 +131,17 @@ app.post('/deploy', async (req, res) => {
 // Stop endpoint
 app.post('/stop', async (req, res) => {
   const { serviceId } = req.body;
-
-  if (!serviceId) {
-    return res.status(400).json({ error: 'Missing serviceId' });
-  }
+  if (!serviceId) return res.status(400).json({ error: 'Missing serviceId' });
 
   try {
-    await graphql(`
-      mutation($id: String!) {
-        serviceDelete(id: $id)
-      }
-    `, { id: serviceId });
-
-    res.json({ success: true, message: 'Bot service deleted' });
+    await graphql(`mutation($id: String!) { serviceDelete(id: $id) }`, { id: serviceId });
+    res.json({ success: true, message: 'Deleted' });
   } catch (err) {
-    console.error('Stop error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Health check
-app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'nova-deploy-proxy' });
-});
+app.get('/', (req, res) => res.json({ status: 'ok', service: 'nova-deploy-proxy' }));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Nova Deploy Proxy running on port ${PORT}`);
-});
+app.listen(PORT, '0.0.0.0', () => console.log(`Proxy running on ${PORT}`));
