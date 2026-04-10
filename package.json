@@ -1,0 +1,13 @@
+{
+  "name": "nova-deploy-proxy",
+  "version": "1.0.0",
+  "description": "Discord bot deployment proxy for Railway",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-fetch": "^2.7.0"
+  }
+}
