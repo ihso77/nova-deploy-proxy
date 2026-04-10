@@ -162,7 +162,7 @@ app.get('/status', async (req, res) => {
   }
 });
 
-// Paymento proxy - bypasses CORS, keeps API keys server-side
+// Paymento proxy - uses correct Paymento API (token-based flow)
 app.post('/payment', async (req, res) => {
   const { amount, currency, description, success_url, cancel_url, metadata } = req.body;
   if (!amount || !success_url) return res.status(400).json({ error: 'Missing fields' });
@@ -171,7 +171,10 @@ app.post('/payment', async (req, res) => {
   const PAYMENTO_SECRET_KEY = process.env.PAYMENTO_SECRET_KEY || 'MzE1NERFQjM3MzcyQUREMkEwOEI2ODJGODc4RjFFQzY=';
 
   try {
-    const paymentRes = await fetch('https://api.paymento.io/v1/payments', {
+    console.log('Payment request:', { amount, success_url });
+
+    // Step 1: Create payment request → get token
+    const paymentRes = await fetch('https://api.paymento.io/v1/payment_request', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -179,7 +182,7 @@ app.post('/payment', async (req, res) => {
         'X-Secret-Key': PAYMENTO_SECRET_KEY,
       },
       body: JSON.stringify({
-        amount,
+        amount: Math.round(amount * 100), // Paymento expects amount in cents
         currency: currency || 'USD',
         description: description || 'Nova VPS subscription',
         success_url,
@@ -188,9 +191,37 @@ app.post('/payment', async (req, res) => {
       }),
     });
 
-    const data = await paymentRes.json();
-    res.status(paymentRes.status).json(data);
+    const text = await paymentRes.text();
+    console.log('Paymento response status:', paymentRes.status);
+    console.log('Paymento response body:', text.substring(0, 500));
+
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      return res.status(502).json({ error: 'بوابة الدفع ردت بيانات غير صالحة', detail: text.substring(0, 200) });
+    }
+
+    if (data.error) {
+      return res.status(502).json({ error: data.error });
+    }
+
+    // Paymento returns a token → redirect URL is https://app.paymento.io/gateway?token=TOKEN
+    const token = data.token || data.payment_token || data.id;
+    if (token) {
+      const gatewayUrl = data.redirect_url || data.url || `https://app.paymento.io/gateway?token=${token}`;
+      return res.json({ paymentUrl: gatewayUrl, token, raw: data });
+    }
+
+    // Fallback: maybe they returned a URL directly
+    if (data.url || data.redirect_url || data.payment_url) {
+      return res.json({ paymentUrl: data.url || data.redirect_url || data.payment_url, raw: data });
+    }
+
+    // Return raw response so frontend can handle it
+    res.json(data);
   } catch (err) {
+    console.error('Payment error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
