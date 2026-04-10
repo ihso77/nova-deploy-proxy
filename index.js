@@ -162,38 +162,46 @@ app.get('/status', async (req, res) => {
   }
 });
 
-// Paymento proxy - uses correct Paymento API (token-based flow)
+// Paymento proxy - correct API format per docs.paymento.io
+// POST /payment — create payment request → returns token + gateway URL
 app.post('/payment', async (req, res) => {
-  const { amount, currency, description, success_url, cancel_url, metadata } = req.body;
-  if (!amount || !success_url) return res.status(400).json({ error: 'Missing fields' });
+  const { amount, currency, returnUrl, orderId, description } = req.body;
+  if (!amount || !returnUrl || !orderId) return res.status(400).json({ error: 'Missing required fields' });
 
   const PAYMENTO_API_KEY = process.env.PAYMENTO_API_KEY || 'MzFCRUEzMTk0MzVCQzRDMDg2N0ZCREFCMzQ5OTc4QzI=';
-  const PAYMENTO_SECRET_KEY = process.env.PAYMENTO_SECRET_KEY || 'MzE1NERFQjM3MzcyQUREMkEwOEI2ODJGODc4RjFFQzY=';
 
   try {
-    console.log('Payment request:', { amount, success_url });
+    console.log('Payment request:', { amount, currency, orderId, returnUrl });
 
-    // Step 1: Create payment request → get token
-    const paymentRes = await fetch('https://api.paymento.io/v1/payment_request', {
+    // Paymento API: POST /v1/payment/request with Api-Key header
+    const paymentRes = await fetch('https://api.paymento.io/v1/payment/request', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${PAYMENTO_API_KEY}`,
-        'X-Secret-Key': PAYMENTO_SECRET_KEY,
+        'Accept': 'application/json',
+        'Api-Key': PAYMENTO_API_KEY,
       },
       body: JSON.stringify({
-        amount: Math.round(amount * 100), // Paymento expects amount in cents
-        currency: currency || 'USD',
-        description: description || 'Nova VPS subscription',
-        success_url,
-        cancel_url,
-        metadata,
+        fiatAmount: String(amount),       // Paymento expects string
+        fiatCurrency: currency || 'USD',
+        returnUrl: returnUrl,
+        orderId: orderId,
+        riskSpeed: 1,                      // 1 = accept after blockchain confirmations (safer)
+        additionalData: description ? [{ key: 'description', value: description }] : [],
       }),
     });
 
     const text = await paymentRes.text();
     console.log('Paymento response status:', paymentRes.status);
     console.log('Paymento response body:', text.substring(0, 500));
+
+    if (!paymentRes.ok) {
+      return res.status(paymentRes.status).json({
+        error: 'بوابة الدفع ردت بخطأ',
+        status: paymentRes.status,
+        detail: text.substring(0, 300),
+      });
+    }
 
     let data;
     try {
@@ -206,22 +214,89 @@ app.post('/payment', async (req, res) => {
       return res.status(502).json({ error: data.error });
     }
 
-    // Paymento returns a token → redirect URL is https://app.paymento.io/gateway?token=TOKEN
-    const token = data.token || data.payment_token || data.id;
-    if (token) {
-      const gatewayUrl = data.redirect_url || data.url || `https://app.paymento.io/gateway?token=${token}`;
-      return res.json({ paymentUrl: gatewayUrl, token, raw: data });
+    // Paymento returns { body: "TOKEN_STRING" } — token is inside "body" field
+    const token = data.body || data.token || data.payment_token || data.id;
+
+    if (!token) {
+      console.error('No token in Paymento response:', JSON.stringify(data));
+      return res.status(502).json({ error: 'لم يتم استلام رمز الدفع من بوابة الدفع', raw: data });
     }
 
-    // Fallback: maybe they returned a URL directly
-    if (data.url || data.redirect_url || data.payment_url) {
-      return res.json({ paymentUrl: data.url || data.redirect_url || data.payment_url, raw: data });
-    }
+    // Build redirect URL
+    const gatewayUrl = `https://app.paymento.io/gateway?token=${token}`;
 
-    // Return raw response so frontend can handle it
-    res.json(data);
+    console.log('Payment created successfully, token:', token);
+    res.json({ url: gatewayUrl, token, orderId });
   } catch (err) {
     console.error('Payment error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Paymento verify - verify payment status after redirect
+// POST /verify — confirm payment was actually completed
+app.post('/verify', async (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ error: 'Missing token' });
+
+  const PAYMENTO_API_KEY = process.env.PAYMENTO_API_KEY || 'MzFCRUEzMTk0MzVCQzRDMDg2N0ZCREFCMzQ5OTc4QzI=';
+
+  try {
+    console.log('Verify payment, token:', token);
+
+    const verifyRes = await fetch('https://api.paymento.io/v1/payment/verify', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Api-Key': PAYMENTO_API_KEY,
+      },
+      body: JSON.stringify({ token }),
+    });
+
+    const text = await verifyRes.text();
+    console.log('Verify response status:', verifyRes.status);
+    console.log('Verify response body:', text.substring(0, 500));
+
+    if (!verifyRes.ok) {
+      return res.status(verifyRes.status).json({
+        error: 'فشل التحقق من الدفع',
+        status: verifyRes.status,
+        detail: text.substring(0, 300),
+      });
+    }
+
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      return res.status(502).json({ error: 'استجابة غير صالحة من بوابة الدفع', detail: text.substring(0, 200) });
+    }
+
+    // Paymento returns { body: { token, orderId, orderStatus, additionalData } }
+    const result = data.body || data;
+
+    // Status codes: 0=Init, 1=Pending, 2=PartialPaid, 3=WaitingToConfirm,
+    // 4=Timeout, 5=UserCanceled, 7=Paid, 8=Approve, 9=Reject
+    const statusMap = {
+      0: 'initialized', 1: 'pending', 2: 'partial', 3: 'confirming',
+      4: 'expired', 5: 'cancelled', 7: 'paid', 8: 'approved', 9: 'rejected'
+    };
+    const statusCode = result.orderStatus ?? result.status ?? -1;
+    const statusName = statusMap[statusCode] || 'unknown';
+
+    const isPaid = statusCode === 7 || statusCode === 8;
+
+    res.json({
+      paid: isPaid,
+      status: statusName,
+      statusCode,
+      orderId: result.orderId,
+      token: result.token || token,
+      raw: result,
+    });
+  } catch (err) {
+    console.error('Verify error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
