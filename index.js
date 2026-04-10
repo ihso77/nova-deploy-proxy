@@ -48,7 +48,7 @@ app.post('/deploy', async (req, res) => {
   try {
     // Create service with image source
     const serviceName = `bot-${botName.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 30)}`;
-    console.log(`Creating service: ${serviceName}`);
+    console.log(`[v3] Creating service: ${serviceName}`);
 
     const imageName = language === 'python' ? 'python:3.11-slim' : 'node:20-alpine';
 
@@ -68,7 +68,8 @@ app.post('/deploy', async (req, res) => {
     if (!serviceId) {
       throw new Error('Failed to create service');
     }
-    console.log(`Service created: ${serviceId}`);
+    console.log(`[v3] Service created: ${serviceId}`);
+    console.log(`[v3] Setting env vars...`);
 
     // Encode bot code as base64
     const codeB64 = Buffer.from(code).toString('base64');
@@ -105,8 +106,11 @@ app.post('/deploy', async (req, res) => {
       ? 'sh -c \'echo "$BOT_CODE_B64" | base64 -d > bot.py && pip install discord.py -q && python bot.py\''
       : 'sh -c \'echo "$BOT_CODE_B64" | base64 -d > bot.js && npm init -y -q 2>/dev/null && npm install discord.js -q 2>/dev/null && node bot.js\'';
 
+    console.log(`[v3] Env vars set. Updating service instance with startCommand...`);
+    console.log(`[v3] startCommand: ${startCmd.substring(0, 60)}...`);
+
     // Update service instance with start command
-    await graphql(`
+    const updateResult = await graphql(`
       mutation($serviceId: String!, $environmentId: String!, $startCommand: String!) {
         serviceInstanceUpdate(
           serviceId: $serviceId,
@@ -116,9 +120,8 @@ app.post('/deploy', async (req, res) => {
           }
         )
       }
-    `, { serviceId, environmentId: NOVA_ENV_ID, startCommand });
-
-    console.log(`Bot deployed: ${serviceName}`);
+    `, { serviceId, environmentId: NOVA_ENV_ID, startCommand: startCmd });
+    console.log(`[v3] Service instance update result:`, updateResult);
     res.json({
       success: true,
       serviceId,
