@@ -462,6 +462,17 @@ async function supabaseCount(table, query = '') {
   return parseInt(res.headers.get('content-range')?.split('/')[1] || '0');
 }
 
+// GET /bot/invite — return bot invite URL with applications.commands scope
+app.get('/bot/invite', async (req, res) => {
+  try {
+    const me = await discordAPI('/users/@me');
+    const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${me.id}&permissions=8&scope=bot%20applications.commands`;
+    res.json({ invite_url: inviteUrl, bot_id: me.id, bot_name: me.username });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /bot/info — bot info + guilds
 app.get('/bot/info', async (req, res) => {
   try {
@@ -607,6 +618,33 @@ app.post('/bot/announce', async (req, res) => {
       }],
     });
     res.json({ success: true, message: 'تم إرسال الإعلان' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /bot/send-ticket-panel — send ticket select panel to a channel
+app.post('/bot/send-ticket-panel', async (req, res) => {
+  try {
+    const { channel_id } = req.body;
+    if (!channel_id) return res.status(400).json({ error: 'channel_id required' });
+
+    await discordAPI(`/channels/${channel_id}/messages`, 'POST', {
+      content: 'لافتح تذكرة دعم فني، اختر القسم من القائمة بالاسفل',
+      components: [{
+        type: 1,
+        components: [{
+          type: 3,
+          custom_id: 'ticket_category',
+          placeholder: 'اختر القسم',
+          options: [
+            { label: 'Support', value: 'support', description: 'فتح تذكرة دعم فني' },
+          ],
+        }],
+      }],
+    });
+
+    res.json({ success: true, message: 'تم ارسال بانل التذاكر' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
