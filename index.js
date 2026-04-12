@@ -737,6 +737,24 @@ app.post('/bot/interactions', async (req, res) => {
   res.json({ type: 1 });
 });
 
+// GET /services — list all Railway services in the project
+app.get('/services', async (req, res) => {
+  try {
+    if (!RAILWAY_TOKEN) return res.status(500).json({ error: 'Railway token not configured' });
+    const data = await gql(`
+      query($p: String!) {
+        project(id: $p) {
+          services { edges { node { id name } } }
+        }
+      }
+    `, { p: PROJECT_ID });
+    const services = data.project?.services?.edges?.map(e => e.node) || [];
+    res.json({ services });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /deploy-bot — deploy the Nova Manager Discord bot as a separate Railway service
 app.post('/deploy-bot', async (req, res) => {
   try {
