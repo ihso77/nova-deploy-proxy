@@ -424,11 +424,22 @@ async function discordAPI(path, method = 'GET', body = null) {
   if (!DISCORD_BOT_TOKEN) throw new Error('DISCORD_BOT_TOKEN not configured');
   const opts = {
     method,
-    headers: { 'Authorization': `Bot ${DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
+    headers: {
+      'Authorization': `Bot ${DISCORD_BOT_TOKEN}`,
+      'Content-Type': 'application/json',
+      'User-Agent': 'NovaManagerBot (https://novavps.app, 1.0)',
+      'Accept': 'application/json',
+    },
   };
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(`https://discord.com/api/v10${path}`, opts);
-  const data = await res.json();
+  const text = await res.text();
+  // Discord sometimes returns HTML (Cloudflare challenge) — handle gracefully
+  if (text.startsWith('<!') || text.startsWith('<html')) {
+    throw new Error('Discord returned HTML (rate-limited or Cloudflare challenge). Please retry in 30-60 seconds.');
+  }
+  let data;
+  try { data = JSON.parse(text); } catch { throw new Error(`Discord returned invalid response: ${text.substring(0, 200)}`); }
   if (!res.ok) throw new Error(data.message || `Discord API ${res.status}`);
   return data;
 }
