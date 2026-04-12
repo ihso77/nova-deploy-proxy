@@ -42,10 +42,10 @@ const SUPABASE_URL = process.env.SUPABASE_URL || 'https://mmvdflwchecvzxzsumlm.s
 if (!process.env.SUPABASE_URL) console.warn('WARN: SUPABASE_URL using development fallback. Set SUPABASE_URL in production.');
 
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
-if (!SUPABASE_ANON_KEY) { console.error('FATAL: SUPABASE_ANON_KEY not set'); process.exit(1); }
+if (!SUPABASE_ANON_KEY) console.warn('WARN: SUPABASE_ANON_KEY not set. Some features may be limited.');
 
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-if (!SUPABASE_SERVICE_KEY) { console.error('FATAL: SUPABASE_SERVICE_ROLE_KEY not set'); process.exit(1); }
+if (!SUPABASE_SERVICE_KEY) console.warn('WARN: SUPABASE_SERVICE_ROLE_KEY not set. Admin endpoints will use anon key.');
 
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 if (!DISCORD_BOT_TOKEN) { console.error('FATAL: DISCORD_BOT_TOKEN not set'); process.exit(1); }
