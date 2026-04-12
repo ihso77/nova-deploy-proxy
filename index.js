@@ -686,23 +686,29 @@ app.post('/bot/send-prices', requireAdmin, async (req, res) => {
     if (!validateDiscordId(channel_id)) return res.status(400).json({ error: 'Invalid channel ID' });
     const plans = await supabaseQuery('plans', '?is_active=eq.true&order=sort_order');
     const fields = plans.map(p => ({
-      name: `${p.is_free ? '🎁' : '⭐'} ${p.name}`,
+      name: `${p.is_free ? '\uD83C\uDF81' : '\u2B50'} ${p.name}`,
       value: [
-        `💰 ${p.price === 0 ? '**مجاني**' : `**$${p.price}/شهر**`}`,
-        `💾 ${p.storage_mb >= 1024 ? `${p.storage_mb / 1024}GB` : `${p.storage_mb}MB`}`,
-        `🧠 ${p.ram_mb >= 1024 ? `${p.ram_mb / 1024}GB` : `${p.ram_mb}MB`}`,
-        `⚡ ${p.cpu_cores} نواة`,
-      ].join('\n'),
+        p.description ? `\uD83D\uDCDD *${p.description}*` : '',
+        `\uD83D\uDCB0 ${p.price === 0 ? '**\u0645\u062C\u0627\u0646\u064A**' : `**$${p.price}/\u0634\u0647\u0631**`}`,
+        `\uD83D\uDCBE ${p.storage_mb >= 1024 ? `${p.storage_mb / 1024}GB` : `${p.storage_mb}MB`} \u062A\u062E\u0632\u064A\u0646`,
+        `\uD83E\uDDE0 ${p.ram_mb >= 1024 ? `${p.ram_mb / 1024}GB` : `${p.ram_mb}MB`} \u0631\u0627\u0645`,
+        `\u26A1 ${p.cpu_cores} \u0646\u0648\u0627\u0629 \u0645\u0639\u0627\u0644\u062C`,
+      ].filter(Boolean).join('\n'),
       inline: true,
     }));
     await discordAPI(`/channels/${channel_id}/messages`, 'POST', {
       embeds: [{
-        title: '🚀 Nova VPS - باقات الاستضافة',
-        description: '🔗 **[اشترك الآن](https://nova-store.dev/plans)**',
-        color: 0x8B5CF6, fields, footer: { text: 'Nova VPS' }, timestamp: new Date().toISOString(),
+        title: '\uD83D\uDE80 Nova VPS - \u0628\u0627\u0642\u0627\u062A \u0627\u0644\u0627\u0633\u062A\u0636\u0627\u0641\u0629',
+        description: '\uD83D\uDD17 **[\u0627\u0634\u062A\u0631\u0643 \u0627\u0644\u0622\u0646](https://nova-store.dev/plans)**',
+        color: 0x8B5CF6,
+        fields,
+        footer: {
+          text: '\uD83D\uDCB0 \u0646\u0638\u0627\u0645 \u0627\u0644\u0643\u0648\u064A\u0646\u0632\u0627\u062A \u0645\u062A\u0648\u0641\u0631 | \u0623\u0642\u0644 \u0628\u0627\u0642\u0629 75 \u0643\u0648\u064A\u0646\u0632 | 100 \u0643\u0648\u064A\u0646\u0632 = 15m | Nova VPS',
+        },
+        timestamp: new Date().toISOString(),
       }],
     });
-    res.json({ success: true, message: 'تم إرسال الأسعار' });
+    res.json({ success: true, message: '\u062A\u0645 \u0625\u0631\u0633\u0627\u0644 \u0627\u0644\u0623\u0633\u0639\u0627\u0631' });
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -875,21 +881,31 @@ app.post('/bot/interactions', async (req, res) => {
     try {
       // /prices
       if (name === 'prices') {
+        const plans = await supabaseQuery('plans', '?is_active=eq.true&order=sort_order');
+        const fields = plans.map(p => ({
+          name: `${p.is_free ? '\uD83C\uDF81' : '\u2B50'} ${p.name}`,
+          value: [
+            p.description ? `\uD83D\uDCDD *${p.description}*` : '',
+            `\uD83D\uDCB0 ${p.price === 0 ? '**\u0645\u062C\u0627\u0646\u064A**' : `**$${p.price}/\u0634\u0647\u0631**`}`,
+            `\uD83D\uDCBE ${p.storage_mb >= 1024 ? `${p.storage_mb / 1024}GB` : `${p.storage_mb}MB`} \u062A\u062E\u0632\u064A\u0646`,
+            `\uD83E\uDDE0 ${p.ram_mb >= 1024 ? `${p.ram_mb / 1024}GB` : `${p.ram_mb}MB`} \u0631\u0627\u0645`,
+            `\u26A1 ${p.cpu_cores} \u0646\u0648\u0627\u0629 \u0645\u0639\u0627\u0644\u062C`,
+          ].filter(Boolean).join('\n'),
+          inline: true,
+        }));
         await discordAPI(`/channels/${channelId}/messages`, 'POST', {
           embeds: [{
-            title: '🚀 Nova VPS - باقات الاستضافة',
-            description: '🔗 **[اشترك الآن](https://nova-store.dev/plans)**',
+            title: '\uD83D\uDE80 Nova VPS - \u0628\u0627\u0642\u0627\u062A \u0627\u0644\u0627\u0633\u062A\u0636\u0627\u0641\u0629',
+            description: '\uD83D\uDD17 **[\u0627\u0634\u062A\u0631\u0643 \u0627\u0644\u0622\u0646](https://nova-store.dev/plans)**',
             color: 0x8B5CF6,
-            fields: [
-              { name: '🎁 مجاني', value: '💾 512MB\n🧠 256MB\n⚡ 0.5 نواة', inline: true },
-              { name: '⭐ أساسي', value: '💰 $0.49/شهر\n💾 1GB\n🧠 512MB', inline: true },
-              { name: '💎 احترافي', value: '💰 $0.99/شهر\n💾 3GB\n🧠 1GB', inline: true },
-              { name: '🚀 مؤسسي', value: '💰 $1.99/شهر\n💾 5GB\n🧠 2GB', inline: true },
-            ],
-            footer: { text: 'Nova VPS' }, timestamp: new Date().toISOString(),
+            fields,
+            footer: {
+              text: '\uD83D\uDCB0 \u0646\u0638\u0627\u0645 \u0627\u0644\u0643\u0648\u064A\u0646\u0632\u0627\u062A \u0645\u062A\u0648\u0641\u0631 | \u0623\u0642\u0644 \u0628\u0627\u0642\u0629 75 \u0643\u0648\u064A\u0646\u0632 | 100 \u0643\u0648\u064A\u0646\u0632 = 15m | Nova VPS',
+            },
+            timestamp: new Date().toISOString(),
           }],
         });
-        return res.json({ type: 4, data: { content: '✅ تم إرسال الأسعار!', flags: 64 } });
+        return res.json({ type: 4, data: { content: '\u2705 \u062A\u0645 \u0625\u0631\u0633\u0627\u0644 \u0627\u0644\u0623\u0633\u0639\u0627\u0631!', flags: 64 } });
       }
 
       // /serverinfo
