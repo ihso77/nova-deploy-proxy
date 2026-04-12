@@ -412,4 +412,261 @@ app.get('/discord-check', async (req, res) => {
 
 app.get('/', (req, res) => res.json({ status: 'ok' }));
 
+// ============================================================
+// Discord Bot Management Endpoints
+// ============================================================
+const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || '';
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://mmvdflwchecvzxzsumlm.supabase.co';
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
+
+async function discordAPI(path, method = 'GET', body = null) {
+  if (!DISCORD_BOT_TOKEN) throw new Error('DISCORD_BOT_TOKEN not configured');
+  const opts = {
+    method,
+    headers: { 'Authorization': `Bot ${DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(`https://discord.com/api/v10${path}`, opts);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || `Discord API ${res.status}`);
+  return data;
+}
+
+async function supabaseQuery(table, query = '') {
+  const key = SUPABASE_SERVICE_KEY || SUPABASE_ANON_KEY;
+  if (!key) return [];
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}${query}`, {
+    headers: { 'apikey': key, 'Authorization': `Bearer ${key}` },
+  });
+  return res.ok ? await res.json() : [];
+}
+
+async function supabaseCount(table, query = '') {
+  const key = SUPABASE_SERVICE_KEY || SUPABASE_ANON_KEY;
+  if (!key) return 0;
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}${query}&select=id`, {
+    headers: { 'apikey': key, 'Authorization': `Bearer ${key}`, 'Prefer': 'count=exact' },
+  });
+  return parseInt(res.headers.get('content-range')?.split('/')[1] || '0');
+}
+
+// GET /bot/info — bot info + guilds
+app.get('/bot/info', async (req, res) => {
+  try {
+    const me = await discordAPI('/users/@me');
+    const guilds = await discordAPI('/users/@me/guilds');
+    res.json({
+      bot: { id: me.id, username: me.username, discriminator: me.discriminator, avatar: me.avatar },
+      guilds_count: guilds.length,
+      guilds: guilds.map(g => ({ id: g.id, name: g.name, icon: g.icon })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /bot/guilds/:guildId/channels — text channels in a guild
+app.get('/bot/guilds/:guildId/channels', async (req, res) => {
+  try {
+    const channels = await discordAPI(`/guilds/${req.params.guildId}/channels`);
+    const textChannels = channels.filter(c => c.type === 0).map(c => ({ id: c.id, name: c.name }));
+    res.json({ channels: textChannels });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /bot/commands/register — register slash commands
+app.post('/bot/commands/register', async (req, res) => {
+  try {
+    const me = await discordAPI('/users/@me');
+    const commands = [
+      {
+        name: 'prices', description: 'عرض باقات Nova VPS', type: 1,
+        options: [{ name: 'channel', description: 'الروم (افتراضي: الحالي)', type: 7, required: false }],
+      },
+      { name: 'serverinfo', description: 'معلومات السيرفر', type: 1 },
+      { name: 'stats', description: 'إحصائيات Nova VPS', type: 1 },
+      {
+        name: 'announce', description: 'إرسال إعلان', type: 1,
+        options: [
+          { name: 'message', description: 'محتوى الإعلان', type: 3, required: true },
+          { name: 'channel', description: 'الروم (افتراضي: الحالي)', type: 7, required: false },
+        ],
+      },
+      { name: 'status', description: 'حالة خدمات Nova VPS', type: 1 },
+    ];
+    const result = await discordAPI(`/applications/${me.id}/commands`, 'PUT', commands);
+    res.json({ success: true, message: `تم تسجيل ${result.length} أمر`, commands: result.map(c => c.name) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /bot/send-prices — send plans embed to a channel
+app.post('/bot/send-prices', async (req, res) => {
+  try {
+    const { channel_id } = req.body;
+    if (!channel_id) return res.status(400).json({ error: 'channel_id required' });
+    const plans = await supabaseQuery('plans', '?is_active=eq.true&order=sort_order');
+    const fields = plans.map(p => ({
+      name: `${p.is_free ? '🎁' : '⭐'} ${p.name}`,
+      value: [
+        `💰 ${p.price === 0 ? '**مجاني**' : `**$${p.price}/شهر**`}`,
+        `💾 ${p.storage_mb >= 1024 ? `${p.storage_mb / 1024}GB` : `${p.storage_mb}MB`}`,
+        `🧠 ${p.ram_mb >= 1024 ? `${p.ram_mb / 1024}GB` : `${p.ram_mb}MB`}`,
+        `⚡ ${p.cpu_cores} نواة`,
+      ].join('\n'),
+      inline: true,
+    }));
+    await discordAPI(`/channels/${channel_id}/messages`, 'POST', {
+      embeds: [{
+        title: '🚀 Nova VPS - باقات الاستضافة',
+        description: '🔗 **[اشترك الآن](https://novavps.app/plans)**',
+        color: 0x8B5CF6, fields, footer: { text: 'Nova VPS' }, timestamp: new Date().toISOString(),
+      }],
+    });
+    res.json({ success: true, message: 'تم إرسال الأسعار' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /bot/announce — send announcement embed
+app.post('/bot/announce', async (req, res) => {
+  try {
+    const { channel_id, message } = req.body;
+    if (!channel_id || !message) return res.status(400).json({ error: 'channel_id and message required' });
+    await discordAPI(`/channels/${channel_id}/messages`, 'POST', {
+      embeds: [{
+        title: '📢 إعلان من Nova VPS', description: message, color: 0x8B5CF6,
+        footer: { text: 'Nova VPS' }, timestamp: new Date().toISOString(),
+      }],
+    });
+    res.json({ success: true, message: 'تم إرسال الإعلان' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /bot/stats — get platform stats
+app.get('/bot/stats', async (req, res) => {
+  try {
+    const [users, projects, subs] = await Promise.all([
+      supabaseCount('profiles'),
+      supabaseCount('projects'),
+      supabaseCount('subscriptions', '?status=eq.active'),
+    ]);
+    res.json({ users, projects, active_subscriptions: subs });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /bot/interactions — Discord webhook for slash commands
+app.post('/bot/interactions', async (req, res) => {
+  const interaction = req.body;
+  // PING
+  if (interaction.type === 1) return res.json({ type: 1 });
+
+  if (interaction.type === 2) {
+    const { name, options = [] } = interaction.data;
+    const channelId = options.find(o => o.name === 'channel')?.value || interaction.channel_id;
+
+    try {
+      // /prices
+      if (name === 'prices') {
+        await discordAPI(`/channels/${channelId}/messages`, 'POST', {
+          embeds: [{
+            title: '🚀 Nova VPS - باقات الاستضافة',
+            description: '🔗 **[اشترك الآن](https://novavps.app/plans)**',
+            color: 0x8B5CF6,
+            fields: [
+              { name: '🎁 مجاني', value: '💾 500MB\n🧠 256MB\n⚡ 1 نواة', inline: true },
+              { name: '⭐ بيزك', value: '💰 $2/شهر\n💾 2GB\n🧠 512MB', inline: true },
+              { name: '💎 برو', value: '💰 $5/شهر\n💾 5GB\n🧠 1GB', inline: true },
+            ],
+            footer: { text: 'Nova VPS' }, timestamp: new Date().toISOString(),
+          }],
+        });
+        return res.json({ type: 4, data: { content: '✅ تم إرسال الأسعار!', flags: 64 } });
+      }
+
+      // /serverinfo
+      if (name === 'serverinfo') {
+        const guild = await discordAPI(`/guilds/${interaction.guild_id}?with_counts=true`);
+        const created = new Date(Number(BigInt(guild.id) >> 22n) + 1420070400000).toLocaleDateString('ar-SA');
+        return res.json({
+          type: 4, data: {
+            embeds: [{
+              title: `📊 معلومات السيرفر: ${guild.name}`, color: 0x8B5CF6,
+              fields: [
+                { name: '👥 الأعضاء', value: `${guild.approximate_member_count || '?'}`, inline: true },
+                { name: '🟢 متصل', value: `${guild.approximate_presence_count || '?'}`, inline: true },
+                { name: '📅 الإنشاء', value: created, inline: true },
+                { name: '🆔 ID', value: guild.id, inline: true },
+              ],
+              flags: 64,
+            }],
+          },
+        });
+      }
+
+      // /stats
+      if (name === 'stats') {
+        const [users, projects, subs] = await Promise.all([
+          supabaseCount('profiles'), supabaseCount('projects'), supabaseCount('subscriptions', '?status=eq.active'),
+        ]);
+        return res.json({
+          type: 4, data: {
+            embeds: [{
+              title: '📈 إحصائيات Nova VPS', color: 0x8B5CF6,
+              fields: [
+                { name: '👥 المستخدمين', value: `${users}`, inline: true },
+                { name: '🤖 المشاريع', value: `${projects}`, inline: true },
+                { name: '⭐ اشتراكات', value: `${subs}`, inline: true },
+              ],
+              footer: { text: 'Nova VPS' }, timestamp: new Date().toISOString(), flags: 64,
+            }],
+          },
+        });
+      }
+
+      // /announce
+      if (name === 'announce') {
+        const msg = options.find(o => o.name === 'message')?.value;
+        const author = interaction.member?.user?.username || 'Admin';
+        await discordAPI(`/channels/${channelId}/messages`, 'POST', {
+          embeds: [{
+            title: '📢 إعلان من Nova VPS', description: msg, color: 0x8B5CF6,
+            footer: { text: `بواسطة ${author}` }, timestamp: new Date().toISOString(),
+          }],
+        });
+        return res.json({ type: 4, data: { content: '✅ تم إرسال الإعلان!', flags: 64 } });
+      }
+
+      // /status
+      if (name === 'status') {
+        return res.json({
+          type: 4, data: {
+            embeds: [{
+              title: '🟢 حالة Nova VPS', description: 'جميع الخدمات تعمل بشكل طبيعي', color: 0x22C55E,
+              fields: [
+                { name: '🌐 الموقع', value: '[novavps.app](https://novavps.app)', inline: true },
+                { name: '⚡ الحالة', value: 'متصل', inline: true },
+              ],
+              footer: { text: 'Nova VPS' }, timestamp: new Date().toISOString(),
+            }],
+          },
+        });
+      }
+    } catch (err) {
+      return res.json({ type: 4, data: { content: `❌ خطأ: ${err.message}`, flags: 64 } });
+    }
+  }
+
+  res.json({ type: 1 });
+});
+
 app.listen(process.env.PORT || 3000, '0.0.0.0', () => console.log('Proxy OK'));
