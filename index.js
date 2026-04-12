@@ -564,6 +564,50 @@ app.get('/bot/stats', async (req, res) => {
   }
 });
 
+// POST /bot/setup — auto-setup: register commands + set interaction endpoint URL
+app.post('/bot/setup', async (req, res) => {
+  try {
+    const me = await discordAPI('/users/@me');
+    const appId = me.id;
+    const proxyUrl = process.env.PUBLIC_URL || `https://proxy-production-a7b5.up.railway.app`;
+    const endpointUrl = `${proxyUrl}/bot/interactions`;
+
+    // 1. Register slash commands
+    const commands = [
+      {
+        name: 'prices', description: 'عرض باقات Nova VPS', type: 1,
+        options: [{ name: 'channel', description: 'الروم (افتراضي: الحالي)', type: 7, required: false }],
+      },
+      { name: 'serverinfo', description: 'معلومات السيرفر', type: 1 },
+      { name: 'stats', description: 'إحصائيات Nova VPS', type: 1 },
+      {
+        name: 'announce', description: 'إرسال إعلان', type: 1,
+        options: [
+          { name: 'message', description: 'محتوى الإعلان', type: 3, required: true },
+          { name: 'channel', description: 'الروم (افتراضي: الحالي)', type: 7, required: false },
+        ],
+      },
+      { name: 'status', description: 'حالة خدمات Nova VPS', type: 1 },
+    ];
+    const cmdResult = await discordAPI(`/applications/${appId}/commands`, 'PUT', commands);
+
+    // 2. Set interaction endpoint URL
+    await discordAPI(`/applications/${appId}/interactions-endpoint-url`, 'PATCH', {
+      interactions_endpoint_url: endpointUrl,
+    });
+
+    res.json({
+      success: true,
+      message: 'تم إعداد البوت بنجاح!',
+      bot: me.username,
+      commands_registered: cmdResult.length,
+      endpoint_url: endpointUrl,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /bot/interactions — Discord webhook for slash commands
 app.post('/bot/interactions', async (req, res) => {
   const interaction = req.body;
