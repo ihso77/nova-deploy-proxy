@@ -427,7 +427,7 @@ async function discordAPI(path, method = 'GET', body = null) {
     headers: {
       'Authorization': `Bot ${DISCORD_BOT_TOKEN}`,
       'Content-Type': 'application/json',
-      'User-Agent': 'NovaManagerBot (https://novavps.app, 1.0)',
+      'User-Agent': 'NovaManagerBot (https://nova-store.dev, 1.0)',
       'Accept': 'application/json',
     },
   };
@@ -493,36 +493,58 @@ app.post('/bot/commands/register', async (req, res) => {
   try {
     const me = await discordAPI('/users/@me');
     const appId = me.id;
-    const commands = [
-      {
-        name: 'prices', description: 'عرض باقات Nova VPS', type: 1,
-        options: [{ name: 'channel', description: 'الروم (افتراضي: الحالي)', type: 7, required: false }],
-      },
-      { name: 'serverinfo', description: 'معلومات السيرفر', type: 1 },
-      { name: 'stats', description: 'إحصائيات Nova VPS', type: 1 },
-      {
-        name: 'announce', description: 'إرسال إعلان', type: 1,
-        options: [
-          { name: 'message', description: 'محتوى الإعلان', type: 3, required: true },
-          { name: 'channel', description: 'الروم (افتراضي: الحالي)', type: 7, required: false },
-        ],
-      },
-      { name: 'status', description: 'حالة خدمات Nova VPS', type: 1 },
-    ];
-    const result = await discordAPI(`/applications/${appId}/commands`, 'PUT', commands);
+    const GUILD_ID = process.env.GUILD_ID || '1492282157601657006';
+    const ALLOWED_ROLE_ID = process.env.ALLOWED_ROLE_ID || '1492495751438401577';
 
-    // Also set the interaction endpoint URL so Discord forwards slash commands here
-    const proxyUrl = process.env.PUBLIC_URL || `https://proxy-production-a7b5.up.railway.app`;
-    try {
-      await discordAPI(`/applications/${appId}/interactions-endpoint-url`, 'PATCH', {
-        interactions_endpoint_url: `${proxyUrl}/bot/interactions`,
-      });
-    } catch (urlErr) {
-      console.warn('Failed to set interaction URL:', urlErr.message);
-      // Don't fail the whole request — commands are still registered
+    // Step 1: Delete all global commands
+    await discordAPI(`/applications/${appId}/commands`, 'PUT', []);
+
+    // Step 2: Register guild commands with role restriction
+    const commands = [
+      { name: 'help', description: 'عرض الأوامر المتاحة', type: 1 },
+      { name: 'prices', description: 'عرض باقات Nova VPS', type: 1, options: [{ name: 'channel', description: 'الروم', type: 7, required: false }] },
+      { name: 'serverinfo', description: 'معلومات السيرفر', type: 1 },
+      { name: 'user', description: 'معلومات مستخدم', type: 1, options: [{ name: 'member', description: 'المستخدم', type: 6, required: false }] },
+      { name: 'avatar', description: 'صورة بروفايل', type: 1, options: [{ name: 'member', description: 'المستخدم', type: 6, required: false }] },
+      { name: 'stats', description: 'إحصائيات Nova VPS', type: 1 },
+      { name: 'ping', description: 'سرعة البوت', type: 1 },
+      { name: 'invite', description: 'رابط دعوة البوت', type: 1 },
+      { name: 'poll', description: 'إنشاء تصويت', type: 1, options: [
+        { name: 'question', description: 'السؤال', type: 3, required: true },
+        { name: 'option1', description: 'الخيار 1', type: 3, required: true },
+        { name: 'option2', description: 'الخيار 2', type: 3, required: true },
+      ]},
+      { name: 'announce', description: 'إرسال إعلان', type: 1, options: [
+        { name: 'message', description: 'محتوى الإعلان', type: 3, required: true },
+        { name: 'channel', description: 'الروم', type: 7, required: false },
+      ]},
+      { name: 'status', description: 'حالة خدمات Nova VPS', type: 1 },
+      { name: 'uptime', description: 'مدة تشغيل البوت', type: 1 },
+      { name: 'roles', description: 'قائمة الرتب', type: 1 },
+      { name: 'emoji-info', description: 'معلومات الإيموجي', type: 1 },
+      { name: 'banner', description: 'بانر السيرفر', type: 1 },
+      { name: 'site-check', description: 'فحص خدمات الموقع', type: 1 },
+      { name: 'top-servers', description: 'أفضل المشاريع النشطة', type: 1, options: [{ name: 'count', description: 'العدد', type: 4, required: false }] },
+      { name: 'plans-detail', description: 'تفاصيل الباقات', type: 1 },
+      { name: 'lookup', description: 'بحث مستخدم (أدمن)', type: 1, options: [{ name: 'email', description: 'البريد', type: 3, required: true }] },
+      { name: 'recent-payments', description: 'آخر المدفوعات (أدمن)', type: 1 },
+      { name: 'set-status-channel', description: 'تعيين روم الحالة', type: 1, options: [{ name: 'channel', description: 'الروم', type: 7, required: true }] },
+      { name: 'send-ticket-panel', description: 'ارسال بانل التذاكر', type: 1, options: [{ name: 'channel', description: 'الروم', type: 7, required: false }] },
+    ];
+    const result = await discordAPI(`/applications/${appId}/guilds/${GUILD_ID}/commands`, 'PUT', commands);
+
+    // Step 3: Set role permissions for each command
+    for (const cmd of result) {
+      try {
+        await discordAPI(`/applications/${appId}/guilds/${GUILD_ID}/commands/${cmd.id}/permissions`, 'PUT', {
+          permissions: [{ id: ALLOWED_ROLE_ID, type: 1, permission: true }],
+        });
+      } catch (permErr) {
+        console.warn(`Failed to set permissions for ${cmd.name}:`, permErr.message);
+      }
     }
 
-    res.json({ success: true, message: `تم تسجيل ${result.length} أمر`, commands: result.map(c => c.name) });
+    res.json({ success: true, message: `تم تسجيل ${result.length} أمر (مقيد للرتبة)`, commands: result.map(c => c.name) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -547,7 +569,7 @@ app.post('/bot/send-prices', async (req, res) => {
     await discordAPI(`/channels/${channel_id}/messages`, 'POST', {
       embeds: [{
         title: '🚀 Nova VPS - باقات الاستضافة',
-        description: '🔗 **[اشترك الآن](https://novavps.app/plans)**',
+        description: '🔗 **[اشترك الآن](https://nova-store.dev/plans)**',
         color: 0x8B5CF6, fields, footer: { text: 'Nova VPS' }, timestamp: new Date().toISOString(),
       }],
     });
@@ -588,34 +610,65 @@ app.get('/bot/stats', async (req, res) => {
   }
 });
 
-// POST /bot/setup — auto-setup: register commands + set interaction endpoint URL
+// POST /bot/setup — auto-setup: register guild commands + set interaction endpoint URL
 app.post('/bot/setup', async (req, res) => {
   try {
     const me = await discordAPI('/users/@me');
     const appId = me.id;
+    const GUILD_ID = process.env.GUILD_ID || '1492282157601657006';
+    const ALLOWED_ROLE_ID = process.env.ALLOWED_ROLE_ID || '1492495751438401577';
     const proxyUrl = process.env.PUBLIC_URL || `https://proxy-production-a7b5.up.railway.app`;
     const endpointUrl = `${proxyUrl}/bot/interactions`;
 
-    // 1. Register slash commands
-    const commands = [
-      {
-        name: 'prices', description: 'عرض باقات Nova VPS', type: 1,
-        options: [{ name: 'channel', description: 'الروم (افتراضي: الحالي)', type: 7, required: false }],
-      },
-      { name: 'serverinfo', description: 'معلومات السيرفر', type: 1 },
-      { name: 'stats', description: 'إحصائيات Nova VPS', type: 1 },
-      {
-        name: 'announce', description: 'إرسال إعلان', type: 1,
-        options: [
-          { name: 'message', description: 'محتوى الإعلان', type: 3, required: true },
-          { name: 'channel', description: 'الروم (افتراضي: الحالي)', type: 7, required: false },
-        ],
-      },
-      { name: 'status', description: 'حالة خدمات Nova VPS', type: 1 },
-    ];
-    const cmdResult = await discordAPI(`/applications/${appId}/commands`, 'PUT', commands);
+    // 1. Delete global commands
+    await discordAPI(`/applications/${appId}/commands`, 'PUT', []);
 
-    // 2. Set interaction endpoint URL
+    // 2. Register guild commands
+    const commands = [
+      { name: 'help', description: 'عرض الأوامر المتاحة', type: 1 },
+      { name: 'prices', description: 'عرض باقات Nova VPS', type: 1, options: [{ name: 'channel', description: 'الروم', type: 7, required: false }] },
+      { name: 'serverinfo', description: 'معلومات السيرفر', type: 1 },
+      { name: 'user', description: 'معلومات مستخدم', type: 1, options: [{ name: 'member', description: 'المستخدم', type: 6, required: false }] },
+      { name: 'avatar', description: 'صورة بروفايل', type: 1, options: [{ name: 'member', description: 'المستخدم', type: 6, required: false }] },
+      { name: 'stats', description: 'إحصائيات Nova VPS', type: 1 },
+      { name: 'ping', description: 'سرعة البوت', type: 1 },
+      { name: 'invite', description: 'رابط دعوة البوت', type: 1 },
+      { name: 'poll', description: 'إنشاء تصويت', type: 1, options: [
+        { name: 'question', description: 'السؤال', type: 3, required: true },
+        { name: 'option1', description: 'الخيار 1', type: 3, required: true },
+        { name: 'option2', description: 'الخيار 2', type: 3, required: true },
+      ]},
+      { name: 'announce', description: 'إرسال إعلان', type: 1, options: [
+        { name: 'message', description: 'محتوى الإعلان', type: 3, required: true },
+        { name: 'channel', description: 'الروم', type: 7, required: false },
+      ]},
+      { name: 'status', description: 'حالة خدمات Nova VPS', type: 1 },
+      { name: 'uptime', description: 'مدة تشغيل البوت', type: 1 },
+      { name: 'roles', description: 'قائمة الرتب', type: 1 },
+      { name: 'emoji-info', description: 'معلومات الإيموجي', type: 1 },
+      { name: 'banner', description: 'بانر السيرفر', type: 1 },
+      { name: 'site-check', description: 'فحص خدمات الموقع', type: 1 },
+      { name: 'top-servers', description: 'أفضل المشاريع النشطة', type: 1, options: [{ name: 'count', description: 'العدد', type: 4, required: false }] },
+      { name: 'plans-detail', description: 'تفاصيل الباقات', type: 1 },
+      { name: 'lookup', description: 'بحث مستخدم (أدمن)', type: 1, options: [{ name: 'email', description: 'البريد', type: 3, required: true }] },
+      { name: 'recent-payments', description: 'آخر المدفوعات (أدمن)', type: 1 },
+      { name: 'set-status-channel', description: 'تعيين روم الحالة', type: 1, options: [{ name: 'channel', description: 'الروم', type: 7, required: true }] },
+      { name: 'send-ticket-panel', description: 'ارسال بانل التذاكر', type: 1, options: [{ name: 'channel', description: 'الروم', type: 7, required: false }] },
+    ];
+    const cmdResult = await discordAPI(`/applications/${appId}/guilds/${GUILD_ID}/commands`, 'PUT', commands);
+
+    // 3. Set role permissions for each command
+    for (const cmd of cmdResult) {
+      try {
+        await discordAPI(`/applications/${appId}/guilds/${GUILD_ID}/commands/${cmd.id}/permissions`, 'PUT', {
+          permissions: [{ id: ALLOWED_ROLE_ID, type: 1, permission: true }],
+        });
+      } catch (permErr) {
+        console.warn(`Failed to set permissions for ${cmd.name}:`, permErr.message);
+      }
+    }
+
+    // 4. Set interaction endpoint URL
     await discordAPI(`/applications/${appId}/interactions-endpoint-url`, 'PATCH', {
       interactions_endpoint_url: endpointUrl,
     });
@@ -625,6 +678,8 @@ app.post('/bot/setup', async (req, res) => {
       message: 'تم إعداد البوت بنجاح!',
       bot: me.username,
       commands_registered: cmdResult.length,
+      guild_only: true,
+      role_restricted: ALLOWED_ROLE_ID,
       endpoint_url: endpointUrl,
     });
   } catch (err) {
@@ -648,12 +703,13 @@ app.post('/bot/interactions', async (req, res) => {
         await discordAPI(`/channels/${channelId}/messages`, 'POST', {
           embeds: [{
             title: '🚀 Nova VPS - باقات الاستضافة',
-            description: '🔗 **[اشترك الآن](https://novavps.app/plans)**',
+            description: '🔗 **[اشترك الآن](https://nova-store.dev/plans)**',
             color: 0x8B5CF6,
             fields: [
-              { name: '🎁 مجاني', value: '💾 500MB\n🧠 256MB\n⚡ 1 نواة', inline: true },
-              { name: '⭐ بيزك', value: '💰 $2/شهر\n💾 2GB\n🧠 512MB', inline: true },
-              { name: '💎 برو', value: '💰 $5/شهر\n💾 5GB\n🧠 1GB', inline: true },
+              { name: '🎁 مجاني', value: '💾 512MB\n🧠 256MB\n⚡ 0.5 نواة', inline: true },
+              { name: '⭐ أساسي', value: '💰 $0.49/شهر\n💾 1GB\n🧠 512MB', inline: true },
+              { name: '💎 احترافي', value: '💰 $0.99/شهر\n💾 3GB\n🧠 1GB', inline: true },
+              { name: '🚀 مؤسسي', value: '💰 $1.99/شهر\n💾 5GB\n🧠 2GB', inline: true },
             ],
             footer: { text: 'Nova VPS' }, timestamp: new Date().toISOString(),
           }],
@@ -721,7 +777,7 @@ app.post('/bot/interactions', async (req, res) => {
             embeds: [{
               title: '🟢 حالة Nova VPS', description: 'جميع الخدمات تعمل بشكل طبيعي', color: 0x22C55E,
               fields: [
-                { name: '🌐 الموقع', value: '[novavps.app](https://novavps.app)', inline: true },
+                { name: '🌐 الموقع', value: '[nova-store.dev](https://nova-store.dev)', inline: true },
                 { name: '⚡ الحالة', value: 'متصل', inline: true },
               ],
               footer: { text: 'Nova VPS' }, timestamp: new Date().toISOString(),
@@ -778,7 +834,7 @@ app.post('/deploy-bot', async (req, res) => {
       { name: 'DISCORD_BOT_TOKEN', value: DISCORD_BOT_TOKEN },
       { name: 'SUPABASE_URL', value: SUPABASE_URL },
       { name: 'SUPABASE_SERVICE_ROLE_KEY', value: SUPABASE_SERVICE_KEY },
-      { name: 'SITE_URL', value: 'https://novavps.app' },
+      { name: 'SITE_URL', value: 'https://nova-store.dev' },
     ];
 
     for (const envVar of envVars) {
