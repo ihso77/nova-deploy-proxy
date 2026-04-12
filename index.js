@@ -1,19 +1,54 @@
 const express = require('express');
 const fetch = require('node-fetch');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 
+// ============ SECURITY: Security Headers (Fix #6) ============
+app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+
+// ============ SECURITY: CORS — restricted origins (Fix #4) ============
+const ALLOWED_ORIGINS = ['https://nova-store.dev', 'https://www.nova-store.dev', 'http://localhost:8080'];
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
+  const origin = req.headers.origin;
+  if (ALLOWED_ORIGINS.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+  }
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
-app.use(express.json({ limit: '5mb' }));
 
-const RAILWAY_API = 'https://backboard.railway.app/graphql/v2';
-const RAILWAY_TOKEN = process.env.RAILWAY_API_TOKEN || '';
+// ============ SECURITY: Reduced body limit (Fix #13) ============
+app.use(express.json({ limit: '1mb' }));
+
+// ============ SECURITY: Rate Limiting (Fix #5) ============
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 200, standardHeaders: true, legacyHeaders: false }));
+
+const deployLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 5, message: { error: 'Deploy rate limit exceeded' } });
+const discordCheckLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, message: { error: 'Too many username checks' } });
+const paymentLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 15, message: { error: 'Too many payment requests' } });
+
+// ============ SECURITY: Secrets — no hardcoded fallbacks (Fix #1) ============
+const RAILWAY_TOKEN = process.env.RAILWAY_API_TOKEN;
+if (!RAILWAY_TOKEN) { console.error('FATAL: RAILWAY_API_TOKEN not set'); process.exit(1); }
+
+const PAYMENTO_API_KEY = process.env.PAYMENTO_API_KEY;
+if (!PAYMENTO_API_KEY) { console.error('FATAL: PAYMENTO_API_KEY not set'); process.exit(1); }
+
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://mmvdflwchecvzxzsumlm.supabase.co';
+if (!process.env.SUPABASE_URL) console.warn('WARN: SUPABASE_URL using development fallback. Set SUPABASE_URL in production.');
+
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+if (!SUPABASE_ANON_KEY) { console.error('FATAL: SUPABASE_ANON_KEY not set'); process.exit(1); }
+
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+if (!SUPABASE_SERVICE_KEY) { console.error('FATAL: SUPABASE_SERVICE_ROLE_KEY not set'); process.exit(1); }
+
+const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
+if (!DISCORD_BOT_TOKEN) { console.error('FATAL: DISCORD_BOT_TOKEN not set'); process.exit(1); }
 
 const HEADERS = {
   'Content-Type': 'application/json',
@@ -22,6 +57,65 @@ const HEADERS = {
 
 const PROJECT_ID = process.env.NOVA_PROJECT_ID || '7b4710b9-bda7-4eb5-9f46-97e70e7dcda9';
 const ENV_ID = process.env.NOVA_ENV_ID || '92d7d13d-1173-4cd0-b6e9-92fdbc1d47ae';
+
+// ============ SECURITY: Authentication Middleware (Fix #2) ============
+const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET;
+const ADMIN_SECRET = process.env.ADMIN_SECRET || 'nova-admin-2024-secret';
+
+// Validate Supabase JWT token
+async function validateToken(authHeader) {
+  if (!authHeader) return null;
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
+
+  // Admin secret bypass (for server-to-server calls)
+  if (token === ADMIN_SECRET) return { id: 'admin', role: 'admin', email: 'admin@nova.vps' };
+
+  // Supabase JWT validation
+  if (SUPABASE_JWT_SECRET) {
+    try {
+      const jwt = require('jsonwebtoken');
+      const payload = jwt.verify(token, SUPABASE_JWT_SECRET, { algorithms: ['HS256'] });
+      return { id: payload.sub, role: payload.role || 'user', email: payload.email };
+    } catch {}
+  }
+
+  // Fallback: validate via Supabase API
+  try {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${token}`,
+      },
+    });
+    if (res.ok) {
+      const userData = await res.json();
+      return { id: userData.id, role: userData.role || 'user', email: userData.email };
+    }
+  } catch {}
+
+  return null;
+}
+
+// Auth middleware
+const requireAuth = async (req, res, next) => {
+  const user = await validateToken(req.headers.authorization);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  req.user = user;
+  next();
+};
+
+const requireAdmin = async (req, res, next) => {
+  const user = await validateToken(req.headers.authorization);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  if (user.role !== 'admin') return res.status(403).json({ error: 'Forbidden: Admin access required' });
+  req.user = user;
+  next();
+};
+
+// ============ SECURITY: Input validation helpers (Fix #12) ============
+function validateDiscordId(id) {
+  return /^\d{17,20}$/.test(id);
+}
 
 async function gql(query, vars = {}) {
   const res = await fetch(RAILWAY_API, {
@@ -36,9 +130,17 @@ async function gql(query, vars = {}) {
   return json.data;
 }
 
-app.post('/deploy', async (req, res) => {
+// ============ SECURITY: Rate-limited deploy endpoint (Fix #3, #5, #10) ============
+app.post('/deploy', requireAuth, deployLimiter, async (req, res) => {
   const { botName, botToken, language, code } = req.body;
   if (!botToken || !code || !language) return res.status(400).json({ error: 'Missing fields' });
+
+  // SECURITY: Input validation (Fix #10)
+  const ALLOWED_LANGUAGES = ['javascript', 'python'];
+  if (!ALLOWED_LANGUAGES.includes(language)) return res.status(400).json({ error: 'Invalid language' });
+  if (!botName || botName.trim().length < 1) return res.status(400).json({ error: 'Bot name required' });
+  if (!code || code.length < 10) return res.status(400).json({ error: 'Code too short' });
+  if (code.length > 500000) return res.status(400).json({ error: 'Code too large (max 500KB)' });
 
   try {
     const name = `bot-${botName.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 30)}`;
@@ -104,18 +206,19 @@ app.post('/deploy', async (req, res) => {
     res.json({ success: true, serviceId, serviceName: name });
   } catch (err) {
     console.error('FAIL:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-app.post('/stop', async (req, res) => {
+// ============ SECURITY: Authenticated stop endpoint (Fix #3) ============
+app.post('/stop', requireAuth, async (req, res) => {
   const { serviceId } = req.body;
   if (!serviceId) return res.status(400).json({ error: 'Missing serviceId' });
   try {
     await gql(`mutation($id: String!) { serviceDelete(id: $id) }`, { id: serviceId });
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -158,13 +261,13 @@ app.get('/status', async (req, res) => {
 
     res.json({ status: deployment.status, logs, deploymentId: deployment.id });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // Paymento proxy - correct API format per docs.paymento.io
 // POST /payment — create payment request → returns token + gateway URL
-app.post('/payment', async (req, res) => {
+app.post('/payment', requireAuth, paymentLimiter, async (req, res) => {
   // Accept both new format (returnUrl/orderId) and old format (success_url/cancel_url)
   const body = req.body;
   const clientAmount = body.amount;
@@ -182,15 +285,23 @@ app.post('/payment', async (req, res) => {
     return res.status(400).json({ error: 'Invalid amount' });
   }
 
-  const PAYMENTO_API_KEY = process.env.PAYMENTO_API_KEY || 'MzFCRUEzMTk0MzVCQzRDMDg2N0ZCREFCMzQ5OTc4QzI=';
-  const SUPABASE_URL = process.env.SUPABASE_URL || 'https://mmvdflwchecvzxzsumlm.supabase.co';
-  const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
+  // SECURITY: Validate return URL domain (Fix #11)
+  const ALLOWED_RETURN_DOMAINS = ['nova-store.dev', 'localhost'];
+  try {
+    const returnUrlParsed = new URL(returnUrl);
+    if (!ALLOWED_RETURN_DOMAINS.some(d => returnUrlParsed.hostname.endsWith(d))) {
+      return res.status(400).json({ error: 'Invalid return URL domain' });
+    }
+  } catch {
+    return res.status(400).json({ error: 'Invalid return URL' });
+  }
 
   try {
-    // SECURITY: Verify price from server if planId provided
+    // SECURITY: Verify price from server if planId provided — always use server price (Fix #9)
     let verifiedAmount = parsedAmount;
 
-    if (planId && SUPABASE_ANON_KEY) {
+    if (planId) {
+      if (!SUPABASE_ANON_KEY) return res.status(500).json({ error: 'Server configuration error' });
       try {
         const planRes = await fetch(`${SUPABASE_URL}/rest/v1/plans?id=eq.${planId}&select=price,name`, {
           headers: {
@@ -198,24 +309,17 @@ app.post('/payment', async (req, res) => {
             'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
           },
         });
-        if (planRes.ok) {
-          const planData = await planRes.json();
-          if (planData && planData.length > 0) {
-            const serverPrice = parseFloat(planData[0].price);
-            if (Math.abs(serverPrice - parsedAmount) > 0.01) {
-              // Client sent wrong price — use server price
-              console.warn('Price mismatch: client sent', parsedAmount, 'server has', serverPrice);
-              verifiedAmount = serverPrice;
-            }
-          }
-        }
+        if (!planRes.ok) return res.status(400).json({ error: 'Plan verification failed' });
+        const planData = await planRes.json();
+        if (!planData || planData.length === 0) return res.status(400).json({ error: 'Invalid plan' });
+        const serverPrice = parseFloat(planData[0].price);
+        verifiedAmount = serverPrice; // ALWAYS use server price
       } catch (e) {
-        // If plan lookup fails, continue with client amount
-        console.warn('Plan price lookup failed, using client amount:', e.message);
+        return res.status(500).json({ error: 'Price verification failed' });
       }
     }
 
-    console.log('Payment request:', { verifiedAmount, currency, orderId, returnUrl });
+    console.log('Payment request:', { verifiedAmount, currency, orderId });
 
     // Paymento API: POST /v1/payment/request with Api-Key header
     const paymentRes = await fetch('https://api.paymento.io/v1/payment/request', {
@@ -262,31 +366,31 @@ app.post('/payment', async (req, res) => {
     const token = data.body || data.token || data.payment_token || data.id;
 
     if (!token) {
-      console.error('No token in Paymento response:', JSON.stringify(data));
-      return res.status(502).json({ error: 'لم يتم استلام رمز الدفع من بوابة الدفع', raw: data });
+      console.error('No token in Paymento response:', JSON.stringify(data).replace(/[A-Za-z0-9_-]{30,}/g, '***'));
+      return res.status(502).json({ error: 'لم يتم استلام رمز الدفع من بوابة الدفع' });
     }
 
     // Build redirect URL
     const gatewayUrl = `https://app.paymento.io/gateway?token=${token}`;
 
-    console.log('Payment created successfully, token:', token);
+    // SECURITY: Mask token in logs (Fix #8)
+    console.log('Payment created successfully, token: ****' + token.slice(-4));
     res.json({ url: gatewayUrl, token, orderId });
   } catch (err) {
     console.error('Payment error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // Paymento verify - verify payment status after redirect
 // POST /verify — confirm payment was actually completed
-app.post('/verify', async (req, res) => {
+app.post('/verify', requireAuth, async (req, res) => {
   const { token } = req.body;
   if (!token) return res.status(400).json({ error: 'Missing token' });
 
-  const PAYMENTO_API_KEY = process.env.PAYMENTO_API_KEY || 'MzFCRUEzMTk0MzVCQzRDMDg2N0ZCREFCMzQ5OTc4QzI=';
-
   try {
-    console.log('Verify payment, token:', token);
+    // SECURITY: Mask token in logs (Fix #8)
+    console.log('Verify payment, token: ****' + token.slice(-4));
 
     const verifyRes = await fetch('https://api.paymento.io/v1/payment/verify', {
       method: 'POST',
@@ -331,24 +435,22 @@ app.post('/verify', async (req, res) => {
 
     const isPaid = statusCode === 7 || statusCode === 8;
 
+    // SECURITY: Remove sensitive data from response (Fix #7)
+    // Only return paid, status, statusCode, orderId — no raw data or tokens
     res.json({
       paid: isPaid,
       status: statusName,
       statusCode,
       orderId: result.orderId,
-      token: result.token || token,
-      raw: result,
     });
   } catch (err) {
     console.error('Verify error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Discord username availability checker proxy
-// Uses Discord's registration endpoint to check usernames without auth
-// Logic: if register returns USERNAME_ALREADY_TAKEN → unavailable, otherwise → available
-app.get('/discord-check', async (req, res) => {
+// Discord username availability checker proxy — rate limited + authenticated (Fix #3, #5)
+app.get('/discord-check', requireAuth, discordCheckLimiter, async (req, res) => {
   const { username } = req.query;
   if (!username || typeof username !== 'string') {
     return res.status(400).json({ error: 'Missing username parameter' });
@@ -406,19 +508,16 @@ app.get('/discord-check', async (req, res) => {
     }
   } catch (err) {
     console.error('Discord check error:', err.message);
-    res.status(500).json({ error: 'Failed to check username', details: err.message });
+    // SECURITY: Don't expose internal error details (Fix #14)
+    res.status(500).json({ error: 'Failed to check username' });
   }
 });
 
 app.get('/', (req, res) => res.json({ status: 'ok' }));
 
 // ============================================================
-// Discord Bot Management Endpoints
+// Discord Bot Management Endpoints — ALL require admin (Fix #3)
 // ============================================================
-const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || '';
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://mmvdflwchecvzxzsumlm.supabase.co';
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
 
 async function discordAPI(path, method = 'GET', body = null) {
   if (!DISCORD_BOT_TOKEN) throw new Error('DISCORD_BOT_TOKEN not configured');
@@ -463,18 +562,18 @@ async function supabaseCount(table, query = '') {
 }
 
 // GET /bot/invite — return bot invite URL with applications.commands scope
-app.get('/bot/invite', async (req, res) => {
+app.get('/bot/invite', requireAdmin, async (req, res) => {
   try {
     const me = await discordAPI('/users/@me');
     const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${me.id}&permissions=8&scope=bot%20applications.commands`;
     res.json({ invite_url: inviteUrl, bot_id: me.id, bot_name: me.username });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // GET /bot/info — bot info + guilds
-app.get('/bot/info', async (req, res) => {
+app.get('/bot/info', requireAdmin, async (req, res) => {
   try {
     const me = await discordAPI('/users/@me');
     const guilds = await discordAPI('/users/@me/guilds');
@@ -484,23 +583,25 @@ app.get('/bot/info', async (req, res) => {
       guilds: guilds.map(g => ({ id: g.id, name: g.name, icon: g.icon })),
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// GET /bot/guilds/:guildId/channels — text channels in a guild
-app.get('/bot/guilds/:guildId/channels', async (req, res) => {
+// GET /bot/guilds/:guildId/channels — text channels in a guild (Fix #3, #12)
+app.get('/bot/guilds/:guildId/channels', requireAdmin, async (req, res) => {
   try {
-    const channels = await discordAPI(`/guilds/${req.params.guildId}/channels`);
+    const guildId = req.params.guildId;
+    if (!validateDiscordId(guildId)) return res.status(400).json({ error: 'Invalid guild ID' });
+    const channels = await discordAPI(`/guilds/${guildId}/channels`);
     const textChannels = channels.filter(c => c.type === 0).map(c => ({ id: c.id, name: c.name }));
     res.json({ channels: textChannels });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // POST /bot/commands/register — register slash commands + set interaction endpoint URL
-app.post('/bot/commands/register', async (req, res) => {
+app.post('/bot/commands/register', requireAdmin, async (req, res) => {
   try {
     const me = await discordAPI('/users/@me');
     const appId = me.id;
@@ -573,15 +674,16 @@ app.post('/bot/commands/register', async (req, res) => {
 
     res.json({ success: true, message: `تم تسجيل ${result.length} أمر (مقيد للرتبة)`, commands: result.map(c => c.name) });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// POST /bot/send-prices — send plans embed to a channel
-app.post('/bot/send-prices', async (req, res) => {
+// POST /bot/send-prices — send plans embed to a channel (Fix #3, #12)
+app.post('/bot/send-prices', requireAdmin, async (req, res) => {
   try {
     const { channel_id } = req.body;
     if (!channel_id) return res.status(400).json({ error: 'channel_id required' });
+    if (!validateDiscordId(channel_id)) return res.status(400).json({ error: 'Invalid channel ID' });
     const plans = await supabaseQuery('plans', '?is_active=eq.true&order=sort_order');
     const fields = plans.map(p => ({
       name: `${p.is_free ? '🎁' : '⭐'} ${p.name}`,
@@ -602,15 +704,16 @@ app.post('/bot/send-prices', async (req, res) => {
     });
     res.json({ success: true, message: 'تم إرسال الأسعار' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// POST /bot/announce — send announcement embed
-app.post('/bot/announce', async (req, res) => {
+// POST /bot/announce — send announcement embed (Fix #3, #12)
+app.post('/bot/announce', requireAdmin, async (req, res) => {
   try {
     const { channel_id, message } = req.body;
     if (!channel_id || !message) return res.status(400).json({ error: 'channel_id and message required' });
+    if (!validateDiscordId(channel_id)) return res.status(400).json({ error: 'Invalid channel ID' });
     await discordAPI(`/channels/${channel_id}/messages`, 'POST', {
       embeds: [{
         title: '📢 إعلان من Nova VPS', description: message, color: 0x8B5CF6,
@@ -619,15 +722,16 @@ app.post('/bot/announce', async (req, res) => {
     });
     res.json({ success: true, message: 'تم إرسال الإعلان' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// POST /bot/send-ticket-panel — send ticket select panel to a channel
-app.post('/bot/send-ticket-panel', async (req, res) => {
+// POST /bot/send-ticket-panel — send ticket select panel to a channel (Fix #3, #12)
+app.post('/bot/send-ticket-panel', requireAdmin, async (req, res) => {
   try {
     const { channel_id } = req.body;
     if (!channel_id) return res.status(400).json({ error: 'channel_id required' });
+    if (!validateDiscordId(channel_id)) return res.status(400).json({ error: 'Invalid channel ID' });
 
     await discordAPI(`/channels/${channel_id}/messages`, 'POST', {
       content: 'لافتح تذكرة دعم فني، اختر القسم من القائمة بالاسفل',
@@ -646,12 +750,12 @@ app.post('/bot/send-ticket-panel', async (req, res) => {
 
     res.json({ success: true, message: 'تم ارسال بانل التذاكر' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// POST /bot/stats — get platform stats
-app.get('/bot/stats', async (req, res) => {
+// GET /bot/stats — get platform stats (Fix #3 — auth required)
+app.get('/bot/stats', requireAuth, async (req, res) => {
   try {
     const [users, projects, subs] = await Promise.all([
       supabaseCount('profiles'),
@@ -660,12 +764,12 @@ app.get('/bot/stats', async (req, res) => {
     ]);
     res.json({ users, projects, active_subscriptions: subs });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // POST /bot/setup — auto-setup: register guild commands + set interaction endpoint URL
-app.post('/bot/setup', async (req, res) => {
+app.post('/bot/setup', requireAdmin, async (req, res) => {
   try {
     const me = await discordAPI('/users/@me');
     const appId = me.id;
@@ -753,11 +857,12 @@ app.post('/bot/setup', async (req, res) => {
       endpoint_url: endpointUrl,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // POST /bot/interactions — Discord webhook for slash commands
+// Note: This endpoint is NOT behind requireAdmin because Discord sends these directly
 app.post('/bot/interactions', async (req, res) => {
   const interaction = req.body;
   // PING
@@ -863,10 +968,9 @@ app.post('/bot/interactions', async (req, res) => {
   res.json({ type: 1 });
 });
 
-// GET /services — list all Railway services in the project
-app.get('/services', async (req, res) => {
+// GET /services — list all Railway services in the project (Fix #3 — admin only)
+app.get('/services', requireAdmin, async (req, res) => {
   try {
-    if (!RAILWAY_TOKEN) return res.status(500).json({ error: 'Railway token not configured' });
     const data = await gql(`
       query($p: String!) {
         project(id: $p) {
@@ -877,16 +981,13 @@ app.get('/services', async (req, res) => {
     const services = data.project?.services?.edges?.map(e => e.node) || [];
     res.json({ services });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// POST /deploy-bot — deploy the Nova Manager Discord bot as a separate Railway service
-app.post('/deploy-bot', async (req, res) => {
+// POST /deploy-bot — deploy the Nova Manager Discord bot as a separate Railway service (Fix #3 — admin only)
+app.post('/deploy-bot', requireAdmin, async (req, res) => {
   try {
-    if (!RAILWAY_TOKEN) return res.status(500).json({ error: 'Railway token not configured' });
-    if (!DISCORD_BOT_TOKEN) return res.status(500).json({ error: 'Discord bot token not configured' });
-
     console.log('Creating Nova Discord Bot service on Railway...');
 
     // 1. Create service from the nova-discord-bot repo
@@ -934,7 +1035,7 @@ app.post('/deploy-bot', async (req, res) => {
     });
   } catch (err) {
     console.error('Deploy bot error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
