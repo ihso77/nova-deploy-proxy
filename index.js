@@ -488,10 +488,11 @@ app.get('/bot/guilds/:guildId/channels', async (req, res) => {
   }
 });
 
-// POST /bot/commands/register — register slash commands
+// POST /bot/commands/register — register slash commands + set interaction endpoint URL
 app.post('/bot/commands/register', async (req, res) => {
   try {
     const me = await discordAPI('/users/@me');
+    const appId = me.id;
     const commands = [
       {
         name: 'prices', description: 'عرض باقات Nova VPS', type: 1,
@@ -508,7 +509,19 @@ app.post('/bot/commands/register', async (req, res) => {
       },
       { name: 'status', description: 'حالة خدمات Nova VPS', type: 1 },
     ];
-    const result = await discordAPI(`/applications/${me.id}/commands`, 'PUT', commands);
+    const result = await discordAPI(`/applications/${appId}/commands`, 'PUT', commands);
+
+    // Also set the interaction endpoint URL so Discord forwards slash commands here
+    const proxyUrl = process.env.PUBLIC_URL || `https://proxy-production-a7b5.up.railway.app`;
+    try {
+      await discordAPI(`/applications/${appId}/interactions-endpoint-url`, 'PATCH', {
+        interactions_endpoint_url: `${proxyUrl}/bot/interactions`,
+      });
+    } catch (urlErr) {
+      console.warn('Failed to set interaction URL:', urlErr.message);
+      // Don't fail the whole request — commands are still registered
+    }
+
     res.json({ success: true, message: `تم تسجيل ${result.length} أمر`, commands: result.map(c => c.name) });
   } catch (err) {
     res.status(500).json({ error: err.message });
