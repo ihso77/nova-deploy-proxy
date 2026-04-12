@@ -495,43 +495,59 @@ app.post('/bot/commands/register', async (req, res) => {
     const appId = me.id;
     const GUILD_ID = process.env.GUILD_ID || '1492282157601657006';
     const ALLOWED_ROLE_ID = process.env.ALLOWED_ROLE_ID || '1492495751438401577';
+    const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${appId}&permissions=8&scope=bot%20applications.commands`;
 
     // Step 1: Delete all global commands
-    await discordAPI(`/applications/${appId}/commands`, 'PUT', []);
+    try {
+      await discordAPI(`/applications/${appId}/commands`, 'PUT', []);
+    } catch (err) {
+      if (err.message.includes('Missing Access')) {
+        return res.status(403).json({ error: 'Missing Access', detail: 'البوت ليس لديه صلاحية applications.commands. أعد دعوة البوت بالرابط أدناه.', invite_url: inviteUrl });
+      }
+      throw err;
+    }
 
-    // Step 2: Register guild commands with role restriction
+    // Step 2: Register guild commands with role restriction (hidden from everyone by default)
     const commands = [
-      { name: 'help', description: 'عرض الأوامر المتاحة', type: 1 },
-      { name: 'prices', description: 'عرض باقات Nova VPS', type: 1, options: [{ name: 'channel', description: 'الروم', type: 7, required: false }] },
-      { name: 'serverinfo', description: 'معلومات السيرفر', type: 1 },
-      { name: 'user', description: 'معلومات مستخدم', type: 1, options: [{ name: 'member', description: 'المستخدم', type: 6, required: false }] },
-      { name: 'avatar', description: 'صورة بروفايل', type: 1, options: [{ name: 'member', description: 'المستخدم', type: 6, required: false }] },
-      { name: 'stats', description: 'إحصائيات Nova VPS', type: 1 },
-      { name: 'ping', description: 'سرعة البوت', type: 1 },
-      { name: 'invite', description: 'رابط دعوة البوت', type: 1 },
+      { name: 'help', description: 'عرض الأوامر المتاحة', type: 1, default_member_permissions: '0' },
+      { name: 'prices', description: 'عرض باقات Nova VPS', type: 1, options: [{ name: 'channel', description: 'الروم', type: 7, required: false }], default_member_permissions: '0' },
+      { name: 'serverinfo', description: 'معلومات السيرفر', type: 1, default_member_permissions: '0' },
+      { name: 'user', description: 'معلومات مستخدم', type: 1, options: [{ name: 'member', description: 'المستخدم', type: 6, required: false }], default_member_permissions: '0' },
+      { name: 'avatar', description: 'صورة بروفايل', type: 1, options: [{ name: 'member', description: 'المستخدم', type: 6, required: false }], default_member_permissions: '0' },
+      { name: 'stats', description: 'إحصائيات Nova VPS', type: 1, default_member_permissions: '0' },
+      { name: 'ping', description: 'سرعة البوت', type: 1, default_member_permissions: '0' },
+      { name: 'invite', description: 'رابط دعوة البوت', type: 1, default_member_permissions: '0' },
       { name: 'poll', description: 'إنشاء تصويت', type: 1, options: [
         { name: 'question', description: 'السؤال', type: 3, required: true },
         { name: 'option1', description: 'الخيار 1', type: 3, required: true },
         { name: 'option2', description: 'الخيار 2', type: 3, required: true },
-      ]},
+      ], default_member_permissions: '0' },
       { name: 'announce', description: 'إرسال إعلان', type: 1, options: [
         { name: 'message', description: 'محتوى الإعلان', type: 3, required: true },
         { name: 'channel', description: 'الروم', type: 7, required: false },
-      ]},
-      { name: 'status', description: 'حالة خدمات Nova VPS', type: 1 },
-      { name: 'uptime', description: 'مدة تشغيل البوت', type: 1 },
-      { name: 'roles', description: 'قائمة الرتب', type: 1 },
-      { name: 'emoji-info', description: 'معلومات الإيموجي', type: 1 },
-      { name: 'banner', description: 'بانر السيرفر', type: 1 },
-      { name: 'site-check', description: 'فحص خدمات الموقع', type: 1 },
-      { name: 'top-servers', description: 'أفضل المشاريع النشطة', type: 1, options: [{ name: 'count', description: 'العدد', type: 4, required: false }] },
-      { name: 'plans-detail', description: 'تفاصيل الباقات', type: 1 },
-      { name: 'lookup', description: 'بحث مستخدم (أدمن)', type: 1, options: [{ name: 'email', description: 'البريد', type: 3, required: true }] },
-      { name: 'recent-payments', description: 'آخر المدفوعات (أدمن)', type: 1 },
-      { name: 'set-status-channel', description: 'تعيين روم الحالة', type: 1, options: [{ name: 'channel', description: 'الروم', type: 7, required: true }] },
-      { name: 'send-ticket-panel', description: 'ارسال بانل التذاكر', type: 1, options: [{ name: 'channel', description: 'الروم', type: 7, required: false }] },
+      ], default_member_permissions: '0' },
+      { name: 'status', description: 'حالة خدمات Nova VPS', type: 1, default_member_permissions: '0' },
+      { name: 'uptime', description: 'مدة تشغيل البوت', type: 1, default_member_permissions: '0' },
+      { name: 'roles', description: 'قائمة الرتب', type: 1, default_member_permissions: '0' },
+      { name: 'emoji-info', description: 'معلومات الإيموجي', type: 1, default_member_permissions: '0' },
+      { name: 'banner', description: 'بانر السيرفر', type: 1, default_member_permissions: '0' },
+      { name: 'site-check', description: 'فحص خدمات الموقع', type: 1, default_member_permissions: '0' },
+      { name: 'top-servers', description: 'أفضل المشاريع النشطة', type: 1, options: [{ name: 'count', description: 'العدد', type: 4, required: false }], default_member_permissions: '0' },
+      { name: 'plans-detail', description: 'تفاصيل الباقات', type: 1, default_member_permissions: '0' },
+      { name: 'lookup', description: 'بحث مستخدم (أدمن)', type: 1, options: [{ name: 'email', description: 'البريد', type: 3, required: true }], default_member_permissions: '0' },
+      { name: 'recent-payments', description: 'آخر المدفوعات (أدمن)', type: 1, default_member_permissions: '0' },
+      { name: 'set-status-channel', description: 'تعيين روم الحالة', type: 1, options: [{ name: 'channel', description: 'الروم', type: 7, required: true }], default_member_permissions: '0' },
+      { name: 'send-ticket-panel', description: 'ارسال بانل التذاكر', type: 1, options: [{ name: 'channel', description: 'الروم', type: 7, required: false }], default_member_permissions: '0' },
     ];
-    const result = await discordAPI(`/applications/${appId}/guilds/${GUILD_ID}/commands`, 'PUT', commands);
+    let result;
+    try {
+      result = await discordAPI(`/applications/${appId}/guilds/${GUILD_ID}/commands`, 'PUT', commands);
+    } catch (err) {
+      if (err.message.includes('Missing Access')) {
+        return res.status(403).json({ error: 'Missing Access', detail: 'البوت ليس لديه صلاحية applications.commands. أعد دعوة البوت بالرابط أدناه.', invite_url: inviteUrl });
+      }
+      throw err;
+    }
 
     // Step 3: Set role permissions for each command
     for (const cmd of result) {
@@ -619,43 +635,59 @@ app.post('/bot/setup', async (req, res) => {
     const ALLOWED_ROLE_ID = process.env.ALLOWED_ROLE_ID || '1492495751438401577';
     const proxyUrl = process.env.PUBLIC_URL || `https://proxy-production-a7b5.up.railway.app`;
     const endpointUrl = `${proxyUrl}/bot/interactions`;
+    const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${appId}&permissions=8&scope=bot%20applications.commands`;
 
     // 1. Delete global commands
-    await discordAPI(`/applications/${appId}/commands`, 'PUT', []);
+    try {
+      await discordAPI(`/applications/${appId}/commands`, 'PUT', []);
+    } catch (err) {
+      if (err.message.includes('Missing Access')) {
+        return res.status(403).json({ error: 'Missing Access', detail: 'البوت ليس لديه صلاحية applications.commands. أعد دعوة البوت بالرابط أدناه.', invite_url: inviteUrl });
+      }
+      throw err;
+    }
 
-    // 2. Register guild commands
+    // 2. Register guild commands (hidden from everyone by default)
     const commands = [
-      { name: 'help', description: 'عرض الأوامر المتاحة', type: 1 },
-      { name: 'prices', description: 'عرض باقات Nova VPS', type: 1, options: [{ name: 'channel', description: 'الروم', type: 7, required: false }] },
-      { name: 'serverinfo', description: 'معلومات السيرفر', type: 1 },
-      { name: 'user', description: 'معلومات مستخدم', type: 1, options: [{ name: 'member', description: 'المستخدم', type: 6, required: false }] },
-      { name: 'avatar', description: 'صورة بروفايل', type: 1, options: [{ name: 'member', description: 'المستخدم', type: 6, required: false }] },
-      { name: 'stats', description: 'إحصائيات Nova VPS', type: 1 },
-      { name: 'ping', description: 'سرعة البوت', type: 1 },
-      { name: 'invite', description: 'رابط دعوة البوت', type: 1 },
+      { name: 'help', description: 'عرض الأوامر المتاحة', type: 1, default_member_permissions: '0' },
+      { name: 'prices', description: 'عرض باقات Nova VPS', type: 1, options: [{ name: 'channel', description: 'الروم', type: 7, required: false }], default_member_permissions: '0' },
+      { name: 'serverinfo', description: 'معلومات السيرفر', type: 1, default_member_permissions: '0' },
+      { name: 'user', description: 'معلومات مستخدم', type: 1, options: [{ name: 'member', description: 'المستخدم', type: 6, required: false }], default_member_permissions: '0' },
+      { name: 'avatar', description: 'صورة بروفايل', type: 1, options: [{ name: 'member', description: 'المستخدم', type: 6, required: false }], default_member_permissions: '0' },
+      { name: 'stats', description: 'إحصائيات Nova VPS', type: 1, default_member_permissions: '0' },
+      { name: 'ping', description: 'سرعة البوت', type: 1, default_member_permissions: '0' },
+      { name: 'invite', description: 'رابط دعوة البوت', type: 1, default_member_permissions: '0' },
       { name: 'poll', description: 'إنشاء تصويت', type: 1, options: [
         { name: 'question', description: 'السؤال', type: 3, required: true },
         { name: 'option1', description: 'الخيار 1', type: 3, required: true },
         { name: 'option2', description: 'الخيار 2', type: 3, required: true },
-      ]},
+      ], default_member_permissions: '0' },
       { name: 'announce', description: 'إرسال إعلان', type: 1, options: [
         { name: 'message', description: 'محتوى الإعلان', type: 3, required: true },
         { name: 'channel', description: 'الروم', type: 7, required: false },
-      ]},
-      { name: 'status', description: 'حالة خدمات Nova VPS', type: 1 },
-      { name: 'uptime', description: 'مدة تشغيل البوت', type: 1 },
-      { name: 'roles', description: 'قائمة الرتب', type: 1 },
-      { name: 'emoji-info', description: 'معلومات الإيموجي', type: 1 },
-      { name: 'banner', description: 'بانر السيرفر', type: 1 },
-      { name: 'site-check', description: 'فحص خدمات الموقع', type: 1 },
-      { name: 'top-servers', description: 'أفضل المشاريع النشطة', type: 1, options: [{ name: 'count', description: 'العدد', type: 4, required: false }] },
-      { name: 'plans-detail', description: 'تفاصيل الباقات', type: 1 },
-      { name: 'lookup', description: 'بحث مستخدم (أدمن)', type: 1, options: [{ name: 'email', description: 'البريد', type: 3, required: true }] },
-      { name: 'recent-payments', description: 'آخر المدفوعات (أدمن)', type: 1 },
-      { name: 'set-status-channel', description: 'تعيين روم الحالة', type: 1, options: [{ name: 'channel', description: 'الروم', type: 7, required: true }] },
-      { name: 'send-ticket-panel', description: 'ارسال بانل التذاكر', type: 1, options: [{ name: 'channel', description: 'الروم', type: 7, required: false }] },
+      ], default_member_permissions: '0' },
+      { name: 'status', description: 'حالة خدمات Nova VPS', type: 1, default_member_permissions: '0' },
+      { name: 'uptime', description: 'مدة تشغيل البوت', type: 1, default_member_permissions: '0' },
+      { name: 'roles', description: 'قائمة الرتب', type: 1, default_member_permissions: '0' },
+      { name: 'emoji-info', description: 'معلومات الإيموجي', type: 1, default_member_permissions: '0' },
+      { name: 'banner', description: 'بانر السيرفر', type: 1, default_member_permissions: '0' },
+      { name: 'site-check', description: 'فحص خدمات الموقع', type: 1, default_member_permissions: '0' },
+      { name: 'top-servers', description: 'أفضل المشاريع النشطة', type: 1, options: [{ name: 'count', description: 'العدد', type: 4, required: false }], default_member_permissions: '0' },
+      { name: 'plans-detail', description: 'تفاصيل الباقات', type: 1, default_member_permissions: '0' },
+      { name: 'lookup', description: 'بحث مستخدم (أدمن)', type: 1, options: [{ name: 'email', description: 'البريد', type: 3, required: true }], default_member_permissions: '0' },
+      { name: 'recent-payments', description: 'آخر المدفوعات (أدمن)', type: 1, default_member_permissions: '0' },
+      { name: 'set-status-channel', description: 'تعيين روم الحالة', type: 1, options: [{ name: 'channel', description: 'الروم', type: 7, required: true }], default_member_permissions: '0' },
+      { name: 'send-ticket-panel', description: 'ارسال بانل التذاكر', type: 1, options: [{ name: 'channel', description: 'الروم', type: 7, required: false }], default_member_permissions: '0' },
     ];
-    const cmdResult = await discordAPI(`/applications/${appId}/guilds/${GUILD_ID}/commands`, 'PUT', commands);
+    let cmdResult;
+    try {
+      cmdResult = await discordAPI(`/applications/${appId}/guilds/${GUILD_ID}/commands`, 'PUT', commands);
+    } catch (err) {
+      if (err.message.includes('Missing Access')) {
+        return res.status(403).json({ error: 'Missing Access', detail: 'البوت ليس لديه صلاحية applications.commands. أعد دعوة البوت بالرابط أدناه.', invite_url: inviteUrl });
+      }
+      throw err;
+    }
 
     // 3. Set role permissions for each command
     for (const cmd of cmdResult) {
