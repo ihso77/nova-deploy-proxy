@@ -737,4 +737,61 @@ app.post('/bot/interactions', async (req, res) => {
   res.json({ type: 1 });
 });
 
+// POST /deploy-bot — deploy the Nova Manager Discord bot as a separate Railway service
+app.post('/deploy-bot', async (req, res) => {
+  try {
+    if (!RAILWAY_TOKEN) return res.status(500).json({ error: 'Railway token not configured' });
+    if (!DISCORD_BOT_TOKEN) return res.status(500).json({ error: 'Discord bot token not configured' });
+
+    console.log('Creating Nova Discord Bot service on Railway...');
+
+    // 1. Create service from the nova-discord-bot repo
+    const d = await gql(`
+      mutation($p: String!, $n: String!, $r: String!) {
+        s: serviceCreate(input: { projectId: $p, name: $n, source: { repo: $r } }) { id }
+      }
+    `, { p: PROJECT_ID, n: 'nova-discord-bot', r: 'ihso77/nova-discord-bot' });
+    const serviceId = d.s?.id;
+    if (!serviceId) throw new Error('Failed to create service');
+    console.log(`Bot service created: ${serviceId}`);
+
+    // 2. Set environment variables
+    const envVars = [
+      { name: 'DISCORD_BOT_TOKEN', value: DISCORD_BOT_TOKEN },
+      { name: 'SUPABASE_URL', value: SUPABASE_URL },
+      { name: 'SUPABASE_SERVICE_ROLE_KEY', value: SUPABASE_SERVICE_KEY },
+      { name: 'SITE_URL', value: 'https://novavps.app' },
+    ];
+
+    for (const envVar of envVars) {
+      if (!envVar.value) continue;
+      await gql(`
+        mutation($input: VariableUpsertInput!) { v: variableUpsert(input: $input) }
+      `, {
+        input: {
+          projectId: PROJECT_ID, environmentId: ENV_ID, serviceId,
+          name: envVar.name, value: envVar.value, skipDeploys: true,
+        },
+      });
+      console.log(`Set env: ${envVar.name}`);
+    }
+
+    // 3. Trigger deploy
+    await gql(`
+      mutation($s: String!, $e: String!) { d: serviceInstanceDeploy(serviceId: $s, environmentId: $e) }
+    `, { s: serviceId, e: ENV_ID });
+    console.log('Bot deploy triggered!');
+
+    res.json({
+      success: true,
+      message: 'تم نشر بوت Nova Manager على Railway!',
+      serviceId,
+      serviceName: 'nova-discord-bot',
+    });
+  } catch (err) {
+    console.error('Deploy bot error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(process.env.PORT || 3000, '0.0.0.0', () => console.log('Proxy OK'));
