@@ -36,7 +36,7 @@ const RAILWAY_TOKEN = process.env.RAILWAY_API_TOKEN;
 if (!RAILWAY_TOKEN) { console.error('FATAL: RAILWAY_API_TOKEN not set'); process.exit(1); }
 
 const PAYMENTO_API_KEY = process.env.PAYMENTO_API_KEY;
-if (!PAYMENTO_API_KEY) { console.error('FATAL: PAYMENTO_API_KEY not set'); process.exit(1); }
+if (!PAYMENTO_API_KEY) console.warn('WARN: PAYMENTO_API_KEY not set. Payment endpoints will be disabled.');
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://mmvdflwchecvzxzsumlm.supabase.co';
 if (!process.env.SUPABASE_URL) console.warn('WARN: SUPABASE_URL using development fallback. Set SUPABASE_URL in production.');
