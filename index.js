@@ -32,6 +32,7 @@ const discordCheckLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, messa
 const paymentLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 15, message: { error: 'Too many payment requests' } });
 
 // ============ SECURITY: Secrets — no hardcoded fallbacks (Fix #1) ============
+const RAILWAY_API = 'https://backboard.railway.app/graphql/v2';
 const RAILWAY_TOKEN = process.env.RAILWAY_API_TOKEN;
 if (!RAILWAY_TOKEN) { console.error('FATAL: RAILWAY_API_TOKEN not set'); process.exit(1); }
 
