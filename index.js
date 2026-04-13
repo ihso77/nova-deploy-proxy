@@ -205,8 +205,8 @@ app.post('/deploy', requireAuth, deployLimiter, async (req, res) => {
     console.log(`Deploy triggered for ${name}`);
     res.json({ success: true, serviceId, serviceName: name });
   } catch (err) {
-    console.error('FAIL:', err.message);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('FAIL:', err.message, err.stack?.substring(0, 500));
+    res.status(500).json({ error: err.message || 'Internal server error' });
   }
 });
 
