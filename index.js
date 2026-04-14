@@ -273,18 +273,22 @@ app.get('/status', async (req, res) => {
         `, { did: deployment.id });
         if (logsData.deploymentLogs) {
           logs = logsData.deploymentLogs
-            .filter(l => l.severity === 'error' || l.severity === 'fatal' ||
+            .filter(function(l) { return l.severity === 'error' || l.severity === 'fatal' ||
               (l.message && (l.message.includes('Logged in') || l.message.includes('Ready') ||
                 l.message.includes('ready') || l.message.includes('✅') || l.message.includes('Error') ||
-                l.message.includes('error') || l.message.includes('bot.js') || l.message.includes('bot.py'))))
-            .map(l => ({ message: l.message, severity: l.severity }));
+                l.message.includes('error') || l.message.includes('bot.js') || l.message.includes('bot.py'))); })
+            .map(function(l) { return { message: l.message, severity: l.severity }; });
         }
-      } catch {}
+      } catch (logErr) {
+        console.warn('Status logs fetch failed:', logErr.message);
+      }
     }
 
-    res.json({ status: deployment.status, logs, deploymentId: deployment.id });
+    res.json({ status: deployment.status, logs: logs, deploymentId: deployment.id });
   } catch (err) {
-    res.status(500).json({ error: 'Internal server error' });
+    // Don't return 500 — return unknown so frontend keeps polling gracefully
+    console.warn('Status check failed for', serviceId, ':', err.message);
+    res.json({ status: 'unknown' });
   }
 });
 
