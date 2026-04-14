@@ -246,23 +246,36 @@ app.post('/stop', requireAuth, async (req, res) => {
 
 // Get deployment status and logs for a service
 app.get('/status', async (req, res) => {
-  if (!RAILWAY_TOKEN) return res.json({ status: 'unknown' });
+  if (!RAILWAY_TOKEN) return res.json({ status: 'unknown', reason: 'no_token' });
   const { serviceId } = req.query;
   if (!serviceId) return res.status(400).json({ error: 'Missing serviceId' });
 
   try {
-    const data = await gql(`
+    // First check if service exists
+    const svcData = await gql(`
       query($sid: String!) {
         service(id: $sid) {
+          id
+          status
           deployments(limit: 1) {
-            edges { node { id status } }
+            edges { node { id status createdAt } }
           }
         }
       }
     `, { sid: serviceId });
 
-    const deployment = data.service?.deployments?.edges?.[0]?.node;
-    if (!deployment) return res.json({ status: 'unknown' });
+    if (!svcData.service) {
+      // Service was deleted or doesn't exist
+      return res.json({ status: 'DELETED', reason: 'service_not_found' });
+    }
+
+    const svcStatus = svcData.service.status;
+    const deployment = svcData.service.deployments?.edges?.[0]?.node;
+
+    // If no deployment yet, but service exists, it's still initializing
+    if (!deployment) {
+      return res.json({ status: 'INITIALIZING', serviceStatus: svcStatus, reason: 'no_deployment_yet' });
+    }
 
     // If deployment is done, fetch logs
     let logs = [];
@@ -275,7 +288,7 @@ app.get('/status', async (req, res) => {
           logs = logsData.deploymentLogs
             .filter(function(l) { return l.severity === 'error' || l.severity === 'fatal' ||
               (l.message && (l.message.includes('Logged in') || l.message.includes('Ready') ||
-                l.message.includes('ready') || l.message.includes('✅') || l.message.includes('Error') ||
+                l.message.includes('ready') || l.message.includes('Error') ||
                 l.message.includes('error') || l.message.includes('bot.js') || l.message.includes('bot.py'))); })
             .map(function(l) { return { message: l.message, severity: l.severity }; });
         }
@@ -284,11 +297,10 @@ app.get('/status', async (req, res) => {
       }
     }
 
-    res.json({ status: deployment.status, logs: logs, deploymentId: deployment.id });
+    res.json({ status: deployment.status, serviceStatus: svcStatus, logs: logs, deploymentId: deployment.id });
   } catch (err) {
-    // Don't return 500 — return unknown so frontend keeps polling gracefully
     console.warn('Status check failed for', serviceId, ':', err.message);
-    res.json({ status: 'unknown' });
+    res.json({ status: 'unknown', reason: err.message });
   }
 });
 
@@ -541,6 +553,40 @@ app.get('/discord-check', requireAuth, discordCheckLimiter, async (req, res) => 
 });
 
 app.get('/', (req, res) => res.json({ status: 'ok' }));
+
+// Debug endpoint — returns full service info including deployment history
+app.get('/debug/service', requireAuth, async (req, res) => {
+  if (!RAILWAY_TOKEN) return res.status(503).json({ error: 'RAILWAY_API_TOKEN not configured' });
+  const { serviceId } = req.query;
+  if (!serviceId) return res.status(400).json({ error: 'Missing serviceId' });
+
+  try {
+    const data = await gql(`
+      query($sid: String!) {
+        service(id: $sid) {
+          id name status
+          deployments(limit: 5) {
+            edges {
+              node {
+                id status createdAt updatedAt
+              }
+            }
+          }
+          variables {
+            edges {
+              node { id name value }
+            }
+          }
+        }
+      }
+    `, { sid: serviceId });
+
+    if (!data.service) return res.json({ error: 'Service not found' });
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ============================================================
 // Discord Bot Management Endpoints — ALL require admin (Fix #3)
