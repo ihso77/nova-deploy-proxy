@@ -256,7 +256,7 @@ app.get('/status', async (req, res) => {
       query($sid: String!) {
         service(id: $sid) {
           id
-          deployments(limit: 5) {
+          deployments(first: 5) {
             edges { node { id status createdAt } }
           }
         }
@@ -563,7 +563,7 @@ app.get('/debug/service', requireAuth, async (req, res) => {
       query($sid: String!) {
         service(id: $sid) {
           id name
-          deployments(limit: 5) {
+          deployments(first: 5) {
             edges {
               node {
                 id status createdAt updatedAt
