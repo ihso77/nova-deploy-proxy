@@ -156,16 +156,18 @@ app.post('/deploy', requireAuth, deployLimiter, async (req, res) => {
 
     // 0. Delete existing service with same name if it exists
     try {
-      const existing = await gql(`
-        query($p: String!, $n: String!) {
-          project(id: $p) { services(filter: { name: { eq: $n } }) { edges { node { id } } } }
+      const allServices = await gql(`
+        query($p: String!) {
+          project(id: $p) { services { edges { node { id name } } } }
         }
-      `, { p: PROJECT_ID, n: name });
-      const existingId = existing.project?.services?.edges?.[0]?.node?.id;
-      if (existingId) {
-        console.log(`Deleting existing service: ${existingId}`);
-        await gql(`mutation($id: String!) { serviceDelete(id: $id) }`, { id: existingId });
-        await new Promise(r => setTimeout(r, 2000)); // Wait for deletion
+      `, { p: PROJECT_ID });
+      const existing = allServices.project?.services?.edges?.find(
+        (e: any) => e.node?.name === name
+      );
+      if (existing?.node?.id) {
+        console.log(`Deleting existing service: ${existing.node.id} (${name})`);
+        await gql(`mutation($id: String!) { serviceDelete(id: $id) }`, { id: existing.node.id });
+        await new Promise(r => setTimeout(r, 2000)); // Wait for deletion to propagate
       }
     } catch (delErr) {
       console.warn('Delete existing warn:', delErr.message);
