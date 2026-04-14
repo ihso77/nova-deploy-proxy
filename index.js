@@ -163,7 +163,7 @@ app.post('/deploy', requireAuth, deployLimiter, async (req, res) => {
         }
       `, { p: PROJECT_ID });
       const existing = allServices.project?.services?.edges?.find(
-        (e: any) => e.node?.name === name
+        function(e) { return e.node?.name === name; }
       );
       if (existing?.node?.id) {
         console.log(`Deleting existing service: ${existing.node.id} (${name})`);
