@@ -34,7 +34,7 @@ const paymentLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 15, message: {
 // ============ SECURITY: Secrets — no hardcoded fallbacks (Fix #1) ============
 const RAILWAY_API = 'https://backboard.railway.app/graphql/v2';
 const RAILWAY_TOKEN = process.env.RAILWAY_API_TOKEN;
-if (!RAILWAY_TOKEN) { console.error('FATAL: RAILWAY_API_TOKEN not set'); process.exit(1); }
+if (!RAILWAY_TOKEN) console.warn('WARN: RAILWAY_API_TOKEN not set. Deploy/stop endpoints will be disabled.');
 
 const PAYMENTO_API_KEY = process.env.PAYMENTO_API_KEY;
 if (!PAYMENTO_API_KEY) console.warn('WARN: PAYMENTO_API_KEY not set. Payment endpoints will be disabled.');
@@ -133,6 +133,7 @@ async function gql(query, vars = {}) {
 
 // ============ SECURITY: Rate-limited deploy endpoint (Fix #3, #5, #10) ============
 app.post('/deploy', requireAuth, deployLimiter, async (req, res) => {
+  if (!RAILWAY_TOKEN) return res.status(503).json({ error: 'RAILWAY_API_TOKEN not configured' });
   const { botName, botToken, language, code } = req.body;
   if (!botToken || !code || !language) return res.status(400).json({ error: 'Missing fields' });
 
@@ -232,6 +233,7 @@ app.post('/deploy', requireAuth, deployLimiter, async (req, res) => {
 
 // ============ SECURITY: Authenticated stop endpoint (Fix #3) ============
 app.post('/stop', requireAuth, async (req, res) => {
+  if (!RAILWAY_TOKEN) return res.status(503).json({ error: 'RAILWAY_API_TOKEN not configured' });
   const { serviceId } = req.body;
   if (!serviceId) return res.status(400).json({ error: 'Missing serviceId' });
   try {
@@ -244,6 +246,7 @@ app.post('/stop', requireAuth, async (req, res) => {
 
 // Get deployment status and logs for a service
 app.get('/status', async (req, res) => {
+  if (!RAILWAY_TOKEN) return res.json({ status: 'unknown' });
   const { serviceId } = req.query;
   if (!serviceId) return res.status(400).json({ error: 'Missing serviceId' });
 
