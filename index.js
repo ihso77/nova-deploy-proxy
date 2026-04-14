@@ -256,8 +256,7 @@ app.get('/status', async (req, res) => {
       query($sid: String!) {
         service(id: $sid) {
           id
-          status
-          deployments(limit: 1) {
+          deployments(limit: 5) {
             edges { node { id status createdAt } }
           }
         }
@@ -269,12 +268,11 @@ app.get('/status', async (req, res) => {
       return res.json({ status: 'DELETED', reason: 'service_not_found' });
     }
 
-    const svcStatus = svcData.service.status;
     const deployment = svcData.service.deployments?.edges?.[0]?.node;
 
     // If no deployment yet, but service exists, it's still initializing
     if (!deployment) {
-      return res.json({ status: 'INITIALIZING', serviceStatus: svcStatus, reason: 'no_deployment_yet' });
+      return res.json({ status: 'INITIALIZING', reason: 'no_deployment_yet' });
     }
 
     // If deployment is done, fetch logs
@@ -297,7 +295,7 @@ app.get('/status', async (req, res) => {
       }
     }
 
-    res.json({ status: deployment.status, serviceStatus: svcStatus, logs: logs, deploymentId: deployment.id });
+    res.json({ status: deployment.status, logs: logs, deploymentId: deployment.id });
   } catch (err) {
     console.warn('Status check failed for', serviceId, ':', err.message);
     res.json({ status: 'unknown', reason: err.message });
@@ -564,17 +562,12 @@ app.get('/debug/service', requireAuth, async (req, res) => {
     const data = await gql(`
       query($sid: String!) {
         service(id: $sid) {
-          id name status
+          id name
           deployments(limit: 5) {
             edges {
               node {
                 id status createdAt updatedAt
               }
-            }
-          }
-          variables {
-            edges {
-              node { id name value }
             }
           }
         }
