@@ -6,7 +6,7 @@ const rateLimit = require('express-rate-limit');
 const app = express();
 
 // ============ SECURITY: Security Headers (Fix #6) ============
-app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false, crossOriginOpenerPolicy: false, crossOriginResourcePolicy: false }));
 
 // ============ SECURITY: CORS — restricted origins (Fix #4) ============
 const ALLOWED_ORIGINS = ['https://nova-store.dev', 'https://www.nova-store.dev', 'http://localhost:8080'];
