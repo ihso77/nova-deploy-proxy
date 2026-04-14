@@ -154,6 +154,23 @@ app.post('/deploy', requireAuth, deployLimiter, async (req, res) => {
     // Use the pre-built runner repo (has discord.js installed in Dockerfile)
     const repo = language === 'python' ? 'ihso77/nova-bot-runner-py' : 'ihso77/nova-bot-runner';
 
+    // 0. Delete existing service with same name if it exists
+    try {
+      const existing = await gql(`
+        query($p: String!, $n: String!) {
+          project(id: $p) { services(filter: { name: { eq: $n } }) { edges { node { id } } } }
+        }
+      `, { p: PROJECT_ID, n: name });
+      const existingId = existing.project?.services?.edges?.[0]?.node?.id;
+      if (existingId) {
+        console.log(`Deleting existing service: ${existingId}`);
+        await gql(`mutation($id: String!) { serviceDelete(id: $id) }`, { id: existingId });
+        await new Promise(r => setTimeout(r, 2000)); // Wait for deletion
+      }
+    } catch (delErr) {
+      console.warn('Delete existing warn:', delErr.message);
+    }
+
     // 1. Create service from repo (Dockerfile has discord.js pre-installed)
     const d = await gql(`
       mutation($p: String!, $n: String!, $r: String!) {
