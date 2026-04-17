@@ -227,7 +227,15 @@ app.post('/deploy', requireAuth, deployLimiter, async (req, res) => {
     res.json({ success: true, serviceId, serviceName: name });
   } catch (err) {
     console.error('FAIL:', err.message, err.stack?.substring(0, 500));
-    res.status(500).json({ error: err.message || 'Internal server error' });
+    const msg = err.message || 'Internal server error';
+    // Give user-friendly messages for known Railway errors
+    if (msg.includes('Free plan') || msg.includes('resource provision limit') || msg.includes('upgrade')) {
+      return res.status(503).json({ error: 'تم تجاوز حد الموارد المجانية في Railway. احذف البوتات غير المستخدمة من Railway dashboard أو استخدم زر تنظيف البوتات.', code: 'QUOTA_EXCEEDED' });
+    }
+    if (msg.includes('already exists')) {
+      return res.status(409).json({ error: 'اسم البوت موجود بالفعل، جرب تغيير اسم المشروع', code: 'ALREADY_EXISTS' });
+    }
+    res.status(500).json({ error: msg });
   }
 });
 
@@ -240,7 +248,43 @@ app.post('/stop', requireAuth, async (req, res) => {
     await gql(`mutation($id: String!) { serviceDelete(id: $id) }`, { id: serviceId });
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: err.message || 'Internal server error' });
+  }
+});
+
+// Cleanup all bot-* services to free Railway quota
+app.post('/cleanup-bots', requireAdmin, async (req, res) => {
+  if (!RAILWAY_TOKEN) return res.status(503).json({ error: 'RAILWAY_API_TOKEN not configured' });
+  try {
+    const data = await gql(`
+      query($p: String!) {
+        project(id: $p) { services { edges { node { id name } } } }
+      }
+    `, { p: PROJECT_ID });
+
+    const services = data.project?.services?.edges || [];
+    const botServices = services.filter(function(s) { return s.node.name.startsWith('bot-'); });
+
+    const deleted = [];
+    const failed = [];
+    for (const s of botServices) {
+      try {
+        await gql(`mutation($id: String!) { serviceDelete(id: $id) }`, { id: s.node.id });
+        deleted.push(s.node.name);
+        console.log('Cleaned up:', s.node.name);
+      } catch (err) {
+        failed.push({ name: s.node.name, error: err.message });
+      }
+    }
+
+    // Wait for Railway to process deletions
+    if (deleted.length > 0) {
+      await new Promise(function(r) { setTimeout(r, 3000); });
+    }
+
+    res.json({ deleted, failed, total: botServices.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
