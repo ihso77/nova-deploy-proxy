@@ -144,6 +144,12 @@ app.post('/deploy', requireAuth, deployLimiter, async (req, res) => {
   if (!code || code.length < 10) return res.status(400).json({ error: 'Code too short' });
   if (code.length > 500000) return res.status(400).json({ error: 'Code too large (max 500KB)' });
 
+  // Validate Discord bot token format before deploying (saves Railway resources)
+  // Discord tokens: base64-like, 59+ chars, no spaces
+  if (!botToken || botToken.length < 50 || /\s/.test(botToken) || botToken.includes('"')) {
+    return res.status(400).json({ error: 'توكن Discord غير صالح. التوكن يجب أن يكون طويل (>50 حرف) بدون مسافات. يمكنك الحصول عليه من https://discord.com/developers/applications', code: 'INVALID_TOKEN' });
+  }
+
   try {
     const name = `bot-${botName.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 30)}`;
     console.log(`Deploy: ${name} (${language})`);
@@ -327,12 +333,29 @@ app.get('/status', async (req, res) => {
           query($did: String!) { deploymentLogs(deploymentId: $did) { message severity } }
         `, { did: deployment.id });
         if (logsData.deploymentLogs) {
+          var seen = new Set();
           logs = logsData.deploymentLogs
-            .filter(function(l) { return l.severity === 'error' || l.severity === 'fatal' ||
-              (l.message && (l.message.includes('Logged in') || l.message.includes('Ready') ||
-                l.message.includes('ready') || l.message.includes('Error') ||
-                l.message.includes('error') || l.message.includes('bot.js') || l.message.includes('bot.py'))); })
-            .map(function(l) { return { message: l.message, severity: l.severity }; });
+            .filter(function(l) {
+              if (!l.message || l.message.trim() === '') return false;
+              // Skip stack trace lines (indentation, at xxx, Node.js, node:internal)
+              if (l.message.startsWith('    at ') || l.message.startsWith('  at ') ||
+                  l.message.startsWith('    ') && l.message.includes('.js:') ||
+                  l.message.match(/^\s*\^\s*$/) ||
+                  l.message === '}' || l.message === '{') return false;
+              // Keep important messages
+              if (l.severity === 'error' || l.severity === 'fatal' ||
+                  l.message.includes('Logged in') || l.message.includes('Ready') ||
+                  l.message.includes('ready') || l.message.includes('Error') ||
+                  l.message.includes('error') || l.message.includes('bot.js') || l.message.includes('bot.py')) {
+                // Deduplicate
+                var key = l.message.trim().substring(0, 200);
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+              }
+              return false;
+            })
+            .map(function(l) { return { message: l.message.trim(), severity: l.severity }; });
         }
       } catch (logErr) {
         console.warn('Status logs fetch failed:', logErr.message);
