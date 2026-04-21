@@ -56,8 +56,8 @@ const HEADERS = {
   'Authorization': `Bearer ${RAILWAY_TOKEN}`,
 };
 
-const PROJECT_ID = process.env.NOVA_PROJECT_ID || '7b4710b9-bda7-4eb5-9f46-97e70e7dcda9';
-const ENV_ID = process.env.NOVA_ENV_ID || '92d7d13d-1173-4cd0-b6e9-92fdbc1d47ae';
+const PROJECT_ID = process.env.NOVA_PROJECT_ID || '6efec212-0e7a-4447-b19f-54284cd9eb82';
+const ENV_ID = process.env.NOVA_ENV_ID || 'ef0df523-e0d2-4d2c-9b28-f49918076f08';
 
 // ============ SECURITY: Authentication Middleware (Fix #2) ============
 const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET;
@@ -914,7 +914,7 @@ app.post('/bot/setup', requireAdmin, async (req, res) => {
     const appId = me.id;
     const GUILD_ID = process.env.GUILD_ID || '1492282157601657006';
     const ALLOWED_ROLE_ID = process.env.ALLOWED_ROLE_ID || '1492495751438401577';
-    const proxyUrl = process.env.PUBLIC_URL || `https://proxy-production-a7b5.up.railway.app`;
+    const proxyUrl = process.env.PUBLIC_URL;
     const endpointUrl = `${proxyUrl}/bot/interactions`;
     const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${appId}&permissions=8&scope=bot%20applications.commands`;
 
