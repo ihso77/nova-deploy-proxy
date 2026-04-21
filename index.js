@@ -49,7 +49,7 @@ const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 if (!SUPABASE_SERVICE_KEY) console.warn('WARN: SUPABASE_SERVICE_ROLE_KEY not set. Admin endpoints will use anon key.');
 
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
-if (!DISCORD_BOT_TOKEN) { console.error('FATAL: DISCORD_BOT_TOKEN not set'); process.exit(1); }
+if (!DISCORD_BOT_TOKEN) console.warn('WARN: DISCORD_BOT_TOKEN not set. Bot management endpoints will be disabled.');
 
 const HEADERS = {
   'Content-Type': 'application/json',
