@@ -1188,4 +1188,156 @@ app.post('/deploy-bot', requireAdmin, async (req, res) => {
   }
 });
 
+// ============================================================
+// Tool Purchase Endpoints
+// ============================================================
+
+// GET /tool/purchase/:productId — check if user purchased a tool
+app.get('/tool/purchase/:productId', requireAuth, async (req, res) => {
+  var productId = req.params.productId;
+  if (!productId) return res.status(400).json({ error: 'Missing productId' });
+  var userId = req.user.id;
+
+  try {
+    var key = SUPABASE_SERVICE_KEY || SUPABASE_ANON_KEY;
+    if (!key) return res.json({ purchased: false });
+
+    var queryUrl = SUPABASE_URL + '/rest/v1/tool_purchases?user_id=eq.' + userId + '&product_id=eq.' + productId + '&status=eq.completed&select=id';
+    var fetchRes = await fetch(queryUrl, {
+      headers: { 'apikey': key, 'Authorization': 'Bearer ' + key },
+    });
+
+    if (!fetchRes.ok) {
+      // Table might not exist yet — return false
+      return res.json({ purchased: false });
+    }
+
+    var data = await fetchRes.json();
+    res.json({ purchased: data && data.length > 0 });
+  } catch (err) {
+    res.json({ purchased: false });
+  }
+});
+
+// POST /tool/purchase/:productId — record a tool purchase (after payment verified)
+app.post('/tool/purchase/:productId', requireAuth, async (req, res) => {
+  var productId = req.params.productId;
+  if (!productId) return res.status(400).json({ error: 'Missing productId' });
+  var userId = req.user.id;
+  var amount = req.body.amount || 0;
+
+  try {
+    var key = SUPABASE_SERVICE_KEY || SUPABASE_ANON_KEY;
+    if (!key) return res.status(500).json({ error: 'Server config error' });
+
+    // Check if already purchased
+    var checkUrl = SUPABASE_URL + '/rest/v1/tool_purchases?user_id=eq.' + userId + '&product_id=eq.' + productId + '&status=eq.completed&select=id';
+    var checkRes = await fetch(checkUrl, {
+      headers: { 'apikey': key, 'Authorization': 'Bearer ' + key },
+    });
+    if (checkRes.ok) {
+      var existing = await checkRes.json();
+      if (existing && existing.length > 0) {
+        return res.json({ success: true, message: 'Already purchased' });
+      }
+    }
+
+    // Insert purchase record
+    var insertUrl = SUPABASE_URL + '/rest/v1/tool_purchases';
+    var insertRes = await fetch(insertUrl, {
+      method: 'POST',
+      headers: {
+        'apikey': key,
+        'Authorization': 'Bearer ' + key,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates',
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        product_id: productId,
+        amount: amount,
+        status: 'completed',
+      }),
+    });
+
+    if (!insertRes.ok) {
+      var errText = await insertRes.text();
+      console.error('Tool purchase insert error:', insertRes.status, errText.substring(0, 200));
+      // If table doesn't exist, return a helpful error
+      if (errText.includes('does not exist') || errText.includes('relation') || insertRes.status === 404) {
+        return res.status(500).json({ error: 'tool_purchases table not found. Please create it in Supabase.', code: 'TABLE_NOT_FOUND' });
+      }
+      return res.status(500).json({ error: 'Failed to record purchase' });
+    }
+
+    res.json({ success: true, message: 'Purchase recorded' });
+  } catch (err) {
+    console.error('Tool purchase error:', err.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /admin/tool-purchase/create-table — create tool_purchases table (admin only)
+app.post('/admin/tool-purchase/create-table', requireAdmin, async (req, res) => {
+  try {
+    var key = SUPABASE_SERVICE_KEY || SUPABASE_ANON_KEY;
+    if (!key) return res.status(500).json({ error: 'SUPABASE_SERVICE_ROLE_KEY not configured' });
+
+    // Use Supabase RPC to create table via raw SQL (service role required)
+    var createRes = await fetch(SUPABASE_URL + '/rest/v1/rpc/exec_sql', {
+      method: 'POST',
+      headers: {
+        'apikey': key,
+        'Authorization': 'Bearer ' + key,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query: [
+          'CREATE TABLE IF NOT EXISTS tool_purchases (',
+          '  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,',
+          '  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,',
+          '  product_id TEXT NOT NULL,',
+          '  amount DECIMAL(10,2) DEFAULT 0,',
+          '  status TEXT DEFAULT \'pending\',',
+          '  created_at TIMESTAMPTZ DEFAULT now(),',
+          '  updated_at TIMESTAMPTZ DEFAULT now(),',
+          '  UNIQUE(user_id, product_id)',
+          ');',
+          'ALTER TABLE tool_purchases ENABLE ROW LEVEL SECURITY;',
+          'CREATE POLICY "Users can read own purchases" ON tool_purchases FOR SELECT USING (auth.uid() = user_id);',
+          'CREATE POLICY "Service role can insert purchases" ON tool_purchases FOR INSERT WITH CHECK (true);',
+        ].join('\n'),
+      }),
+    });
+
+    if (!createRes.ok && createRes.status !== 404) {
+      var errText = await createRes.text();
+      // Fallback: try direct SQL via pg endpoint
+      console.warn('RPC create table failed:', errText.substring(0, 200));
+      return res.status(500).json({
+        error: 'Could not create table via RPC. Please create it manually in Supabase SQL Editor with:',
+        sql: [
+          'CREATE TABLE IF NOT EXISTS tool_purchases (',
+          '  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,',
+          '  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,',
+          '  product_id TEXT NOT NULL,',
+          '  amount DECIMAL(10,2) DEFAULT 0,',
+          '  status TEXT DEFAULT \'pending\',',
+          '  created_at TIMESTAMPTZ DEFAULT now(),',
+          '  updated_at TIMESTAMPTZ DEFAULT now(),',
+          '  UNIQUE(user_id, product_id)',
+          ');',
+          'ALTER TABLE tool_purchases ENABLE ROW LEVEL SECURITY;',
+          'CREATE POLICY "Users can read own purchases" ON tool_purchases FOR SELECT USING (auth.uid() = user_id);',
+          'CREATE POLICY "Service role can insert purchases" ON tool_purchases FOR INSERT WITH CHECK (true);',
+        ].join('\n'),
+      });
+    }
+
+    res.json({ success: true, message: 'tool_purchases table created or already exists' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(process.env.PORT || 3000, '0.0.0.0', () => console.log('Proxy OK'));
